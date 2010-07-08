@@ -150,41 +150,33 @@ int IntersectTwoImages(gpc_polygon *intersect,
     gpc_polygon invImg2Bound;
     gpc_polygon img1Bound;
 
-    memset(&invImg2Bound, 0, sizeof(gpc_polygon));
-    memset(&img1Bound,    0, sizeof(gpc_polygon));
-    memset(&intersect,    0, sizeof(gpc_polygon));
+    CvPoint2D64f img1VertLst[4];
+    CvPoint2D64f img2VertLst[4];
 
-    gpc_vertex_list img1VertLst, img2VertLst;
-    img1VertLst.num_vertices = 4;
-    img1VertLst.vertex       = (gpc_vertex *)calloc(4, sizeof(gpc_vertex));
-    img2VertLst.num_vertices = 4;
-    img2VertLst.vertex       = (gpc_vertex *)calloc(4, sizeof(gpc_vertex));
+    img1VertLst[0].x = 0;
+    img1VertLst[0].y = 0;
+    img1VertLst[1].x = img1->width;
+    img1VertLst[1].y = 0;
+    img1VertLst[2].x = img1->width;
+    img1VertLst[2].y = img1->height;
+    img1VertLst[3].x = 0;
+    img1VertLst[3].y = img1->height;
 
-    img1VertLst.vertex[0].x = 0;
-    img1VertLst.vertex[0].y = 0;
-    img1VertLst.vertex[1].x = img1->width;
-    img1VertLst.vertex[1].y = 0;
-    img1VertLst.vertex[2].x = img1->width;
-    img1VertLst.vertex[2].y = img1->height;
-    img1VertLst.vertex[3].x = 0;
-    img1VertLst.vertex[3].y = img1->height;
-
-    CvPoint img2Corners[4];
-    img2Corners[0].x = 0;
-    img2Corners[0].y = 0;
-    img2Corners[1].x = img2->width;
-    img2Corners[1].y = 0;
-    img2Corners[2].x = img2->width;
-    img2Corners[2].y = img2->height;
-    img2Corners[3].x = 0;
-    img2Corners[3].y = img2->height;
+    img2VertLst[0].x = 0;
+    img2VertLst[0].y = 0;
+    img2VertLst[1].x = img2->width;
+    img2VertLst[1].y = 0;
+    img2VertLst[2].x = img2->width;
+    img2VertLst[2].y = img2->height;
+    img2VertLst[3].x = 0;
+    img2VertLst[3].y = img2->height;
 
     // Convert img2 corners use "invTransMat x [corner.x, corner.y, 1]^T"
     int i;
     for (i=0; i<4; i++)
     {
-        cvSetReal1D(tmpVector, 0, img2Corners[i].x);
-        cvSetReal1D(tmpVector, 1, img2Corners[i].y);
+        cvSetReal1D(tmpVector, 0, img2VertLst[i].x);
+        cvSetReal1D(tmpVector, 1, img2VertLst[i].y);
         cvSetReal1D(tmpVector, 2, 1.0);
 
         cvMatMul(invTransMat, tmpVector, resltVector);
@@ -192,20 +184,46 @@ int IntersectTwoImages(gpc_polygon *intersect,
         double scale = cvGetReal1D(resltVector, 2);
         cvScale(resltVector, resltVector, 1.0/scale);
 
-        img2VertLst.vertex[i].x = cvGetReal1D(resltVector, 0);
-        img2VertLst.vertex[i].y = cvGetReal1D(resltVector, 1);
+        img2VertLst[i].x = cvGetReal1D(resltVector, 0);
+        img2VertLst[i].y = cvGetReal1D(resltVector, 1);
     }
 
-    gpc_add_contour(&invImg2Bound, &img2VertLst, 0);
-    gpc_add_contour(&img1Bound,    &img1VertLst, 0);
+    int poly1Fd, poly2Fd;
+    char tmpFlTmplt1[] = "poly_XXXXXX";
+    char tmpFlTmplt2[] = "poly_XXXXXX";
+    FILE *poly1Fp, *poly2Fp;
+
+    poly1Fd = mkstemp(tmpFlTmplt1);
+    poly2Fd = mkstemp(tmpFlTmplt2);
+    poly1Fp = fdopen(poly1Fd, "w+");
+    poly2Fp = fdopen(poly2Fd, "w+");
+
+    fprintf(poly1Fp, "%d\n", 1);
+    fprintf(poly1Fp, "%d\n", 4);
+    fprintf(poly2Fp, "%d\n", 1);
+    fprintf(poly2Fp, "%d\n", 4);
+    for (i=0; i<4; i++)
+    {
+        fprintf(poly1Fp, "%lf %lf\n", img1VertLst[i].x, img1VertLst[i].y);
+        fprintf(poly2Fp, "%lf %lf\n", img2VertLst[i].x, img2VertLst[i].y);
+    }
+
+    fseek(poly1Fp, 0, SEEK_SET);
+    fseek(poly2Fp, 0, SEEK_SET);
+
+    gpc_read_polygon(poly1Fp, 0, &img1Bound);
+    gpc_read_polygon(poly2Fp, 0, &invImg2Bound);
 
     gpc_polygon_clip(GPC_INT, &img1Bound, &invImg2Bound, intersect);
 
     cvReleaseMat(&invTransMat);
     cvReleaseMat(&tmpVector);
     cvReleaseMat(&resltVector);
-    free(img1VertLst.vertex);
-    free(img2VertLst.vertex);
+    gpc_free_polygon(&img1Bound);
+    gpc_free_polygon(&invImg2Bound);
+    
+    fclose(poly1Fp);
+    fclose(poly2Fp);
 
     return 0;
 }
@@ -220,7 +238,6 @@ int main( int argc, char** argv )
 	struct feature* feat1, *feat2;
 	struct kd_node* kd_root;
 	int n1, n2, i;
-    int ret;
 
 	if (argc != 3)
 	{
@@ -279,7 +296,9 @@ int main( int argc, char** argv )
 	struct feature **inliers;
 	int    nin;
 
-	transMat = ransac_xform(feat1, n1, FEATURE_FWD_MATCH, lsq_homog, 4, 0.5, homog_xfer_err, 3.0, &inliers, &nin);
+	transMat = ransac_xform(feat1, n1, FEATURE_FWD_MATCH, 
+                            lsq_homog, 4, 0.5, homog_xfer_err, 3.0, 
+                            &inliers, &nin);
 	resize_img();
 
     //cvSaveImage("matchedfeat.jpg", stacked);
