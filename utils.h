@@ -116,7 +116,7 @@ argument
 
 @param format an error message format string (as with \c printf(3)).
 */
-extern void fatal_error( char* format, ... );
+extern void fatal_error(const char* format, ... );
 
 
 /**

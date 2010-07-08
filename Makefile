@@ -32,7 +32,7 @@ endif
 
 LIBS=   -lm $(shell pkg-config --libs opencv) $(shell gsl-config --libs)
 AFLAGS=  
-CFLAGS= -g $(shell pkg-config --cflags opencv) $(shell gsl-config --cflags)
+CFLAGS= -g -O0 $(shell pkg-config --cflags opencv) $(shell gsl-config --cflags)
 FLAGS=  $(CFLAGS) -Wall -I$(INCDIR) -I$(ADDINCDIR)
 
 ifeq ($(DBG),1)
@@ -51,9 +51,9 @@ OBJ1 =  $(SRC:$(SRCDIR)/%.c=$(OBJDIR)/%.o$(SUFFIX))
 OBJ=    $(OBJ1:$(SRCDIR)/%.cpp=$(OBJDIR)/%.o$(SUFFIX))
 BIN=    $(BINDIR)/$(NAME)$(SUFFIX)
 
-.PHONY: default distclean clean tags depend
+.PHONY: default distclean clean tags
 
-default: messages depend bin 
+default: messages $(DEPEND) $(BIN) 
 
 messages:
 ifeq ($(M32),1)
@@ -75,14 +75,14 @@ tags:
 	@echo update tag table
 	@ctags inc/*.h src/*.c
 
-bin:    $(OBJ)
+$(BIN):    $(OBJ)
 	@echo
 	@echo 'creating binary "$(BIN)"'
 	$(CC) $(AFLAGS) -o $(BIN) $(OBJ) $(LIBS)
 	@echo '... done'
 	@echo
 
-depend:
+$(DEPEND): $(SRC)
 	@echo
 	@echo 'checking dependencies'
 	$(SHELL) -ec '$(CC) $(AFLAGS) -MM $(CFLAGS) -I$(INCDIR) -I$(ADDINCDIR) $(SRC) $(ADDSRC)                  \

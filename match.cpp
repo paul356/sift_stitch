@@ -1,18 +1,9 @@
-//---OpenCV�Ŀ��ļ�-----------
-// #pragma comment (lib,"cv")
-// #pragma comment (lib,"highgui")
-// #pragma comment (lib, "cxcore")
-
-//---gsl�Ŀ��ļ�-----------
-// #pragma comment (lib, "libgsl.a")
-
-
-	#include "sift.h"
-	#include "imgfeatures.h"
-	#include "kdtree.h"
-	#include "utils.h"
-	#include "xform.h"
-
+#include "sift.h"
+#include "imgfeatures.h"
+#include "kdtree.h"
+#include "utils.h"
+#include "xform.h"
+#include "gpc.h"
 
 #include <cv.h>
 #include <cxcore.h>
@@ -38,24 +29,15 @@
 
 #define EQUAL_IMAGE_SIZE(src, dst) (((src)->width == (dst)->width)&&((dst)->height == (dst)->height))
 
-/************************** global functions ************************************/
-
 char *img1_file = 0;
 char *img2_file = 0;
 
-double imgzoom_scale=1.0;			//��ʾƥ������ͼ�����ű���
+double imgzoom_scale=1.0;
 
 IplImage* stacked;
 
-
-/**************************other functions **************************************/
-
-
-//----������Ӧ���������ڸ���������Ӧ����ƥ�������Ĵ��ڴ�С��
+/****** callbacks *******/
 void on_mouse( int event, int x, int y, int flags, void* param ) ;
-
-//---�ı�ƥ������ͼ���Ĵ�С------------------------
-
 void resize_img();
 
 /**
@@ -64,8 +46,8 @@ void resize_img();
 void OverlayImages(const IplImage *part1, double w1, const IplImage *part2, double w2, IplImage *out);
 
 /**
- * Blend images using algorithm proposed by Burt and Adelson. Please refer to 
- * "A Multiresolution Spline With Application to Image Mosaics" for more info.
+ * Blend images using algorithm proposed by Burt and Adelson. 
+ * Please refer to "A Multiresolution Spline With Application to Image Mosaics" for more info.
  */
 template <typename ElementType>
 void blend_images(const IplImage *part1, const IplImage *part2, const IplImage *map, IplImage *out);
@@ -92,7 +74,141 @@ void nonlinear_optimize(CvMat *trans, struct feature **in, int nin);
 
 CvPoint ProjPoint(CvPoint in, CvMat *trans);
 
-/********************************** Main *************************************/
+int MatchSiftFeats(struct kd_node **ppKdRoot, 
+        struct feature *pFeat1, int n1, 
+        struct feature *pFeat2, int n2,
+        struct CvSeq *pUpSeq, 
+        struct CvSeq *pDownSeq,
+        int    img1Height)
+{
+    struct feature   *feat;
+	struct feature** nbrs;
+	CvPoint pt1, pt2;
+
+    int i, k, m=0;
+    double d0, d1;
+
+	*ppKdRoot = kdtree_build( pFeat2, n2 );
+
+	for( i = 0; i < n1; i++ )
+	{
+		feat = pFeat1 + i;
+		k = kdtree_bbf_knn( *ppKdRoot, feat, 2, &nbrs, KDTREE_BBF_MAX_NN_CHKS );
+		if( k == 2 )
+		{
+			d0 = descr_dist_sq( feat, nbrs[0] );
+			d1 = descr_dist_sq( feat, nbrs[1] );
+			if( d0 < d1 * NN_SQ_DIST_RATIO_THR )
+			{
+				pt1 = cvPoint( cvRound( feat->x ), cvRound( feat->y ) );
+				pt2 = cvPoint( cvRound( nbrs[0]->x ), cvRound( nbrs[0]->y ) );
+
+				cvSeqPush(pUpSeq,  &pt1); 
+				cvSeqPush(pDownSeq,&pt2);
+
+				pt2.y += img1Height;
+				cvLine( stacked, pt1, pt2, CV_RGB(255,0,255), 1, 8, 0 );
+				m++;
+				pFeat1[i].fwd_match = nbrs[0];
+			}
+		}
+
+		free( nbrs );
+	}
+
+    return 0;
+}
+
+int InverseTransMat(CvMat **ppInvMat, const CvMat *pMat)
+{
+    double ret;
+
+    *ppInvMat = cvCreateMat(pMat->rows, pMat->cols, pMat->type);
+    ret = cvInvert(pMat, *ppInvMat, CV_LU);
+
+    if (ret == 0)
+        return -1;
+    else
+        return 0;
+}
+
+int IntersectTwoImages(gpc_polygon *intersect, 
+        const IplImage *img1, 
+        const IplImage *img2, 
+        const CvMat *transMat)
+{
+    int ret;
+
+    /* Get transform matrix from img2 to img1 */
+    CvMat *invTransMat = NULL;
+    ret = InverseTransMat(&invTransMat, transMat);
+    assert(ret == 0);
+
+    CvMat *tmpVector   = cvCreateMat(3, 1, CV_64FC1);
+    CvMat *resltVector = cvCreateMat(3, 1, CV_64FC1);
+
+    gpc_polygon invImg2Bound;
+    gpc_polygon img1Bound;
+
+    memset(&invImg2Bound, 0, sizeof(gpc_polygon));
+    memset(&img1Bound,    0, sizeof(gpc_polygon));
+    memset(&intersect,    0, sizeof(gpc_polygon));
+
+    gpc_vertex_list img1VertLst, img2VertLst;
+    img1VertLst.num_vertices = 4;
+    img1VertLst.vertex       = (gpc_vertex *)calloc(4, sizeof(gpc_vertex));
+    img2VertLst.num_vertices = 4;
+    img2VertLst.vertex       = (gpc_vertex *)calloc(4, sizeof(gpc_vertex));
+
+    img1VertLst.vertex[0].x = 0;
+    img1VertLst.vertex[0].y = 0;
+    img1VertLst.vertex[1].x = img1->width;
+    img1VertLst.vertex[1].y = 0;
+    img1VertLst.vertex[2].x = img1->width;
+    img1VertLst.vertex[2].y = img1->height;
+    img1VertLst.vertex[3].x = 0;
+    img1VertLst.vertex[3].y = img1->height;
+
+    CvPoint img2Corners[4];
+    img2Corners[0].x = 0;
+    img2Corners[0].y = 0;
+    img2Corners[1].x = img2->width;
+    img2Corners[1].y = 0;
+    img2Corners[2].x = img2->width;
+    img2Corners[2].y = img2->height;
+    img2Corners[3].x = 0;
+    img2Corners[3].y = img2->height;
+
+    // Convert img2 corners use "invTransMat x [corner.x, corner.y, 1]^T"
+    int i;
+    for (i=0; i<4; i++)
+    {
+        cvSetReal1D(tmpVector, 0, img2Corners[i].x);
+        cvSetReal1D(tmpVector, 1, img2Corners[i].y);
+        cvSetReal1D(tmpVector, 2, 1.0);
+
+        cvMatMul(invTransMat, tmpVector, resltVector);
+
+        double scale = cvGetReal1D(resltVector, 2);
+        cvScale(resltVector, resltVector, 1.0/scale);
+
+        img2VertLst.vertex[i].x = cvGetReal1D(resltVector, 0);
+        img2VertLst.vertex[i].y = cvGetReal1D(resltVector, 1);
+    }
+
+    gpc_add_contour(&invImg2Bound, &img2VertLst, 0);
+    gpc_add_contour(&img1Bound,    &img1VertLst, 0);
+
+    gpc_polygon_clip(GPC_INT, &img1Bound, &invImg2Bound, intersect);
+
+    cvReleaseMat(&invTransMat);
+    cvReleaseMat(&tmpVector);
+    cvReleaseMat(&resltVector);
+    free(img1VertLst.vertex);
+    free(img2VertLst.vertex);
+
+    return 0;
+}
 
 
 int main( int argc, char** argv )
@@ -101,12 +217,10 @@ int main( int argc, char** argv )
 	IplImage  *img1;
 	IplImage  *img2;
 
-	struct feature* feat1, * feat2, * feat;
-	struct feature** nbrs;
+	struct feature* feat1, *feat2;
 	struct kd_node* kd_root;
-	CvPoint pt1, pt2;
-	double d0, d1;
-	int n1, n2, k, i, j, m = 0;
+	int n1, n2, i;
+    int ret;
 
 	if (argc != 3)
 	{
@@ -117,18 +231,11 @@ int main( int argc, char** argv )
 	img1_file = argv[1];
 	img2_file = argv[2];
 
-	//------------�ڴ��洢��------------
 	CvMemStorage* memstorage = cvCreateMemStorage(0);
-
-	//-----------up_seq�洢img1ƥ������������������-----------
-
 	CvSeq *up_seq = cvCreateSeq(	CV_SEQ_ELTYPE_POINT,
 					sizeof(CvSeq),
 					sizeof(CvPoint),
 					memstorage); 
-
-	//-----------down_seq�洢img2ƥ������������������-----------
-
 	CvSeq *down_seq = cvCreateSeq(	CV_SEQ_ELTYPE_POINT,
 					sizeof(CvSeq),
 					sizeof(CvPoint),
@@ -151,7 +258,6 @@ int main( int argc, char** argv )
 	fprintf( stderr, "Finding features in %s...\n", img2_file );
 	n2 = sift_features( img2, &feat2 );
 
-	//----------��ʾimg1��SIFT����---------
 	if(1)
 	{
 		//draw_features( img1, feat1, n1 );
@@ -160,7 +266,6 @@ int main( int argc, char** argv )
 
 	}
 
-	//----------��ʾimg2��SIFT����---------
 	if(1)
 	{
 		//draw_features( img2, feat2, n2 );
@@ -168,40 +273,13 @@ int main( int argc, char** argv )
 		cvShowImage( "img2", img2 );
 	}
 
-	kd_root = kdtree_build( feat2, n2 );
-
-	for( i = 0; i < n1; i++ )
-	{
-		feat = feat1 + i;
-		k = kdtree_bbf_knn( kd_root, feat, 2, &nbrs, KDTREE_BBF_MAX_NN_CHKS );
-		if( k == 2 )
-		{
-			d0 = descr_dist_sq( feat, nbrs[0] );
-			d1 = descr_dist_sq( feat, nbrs[1] );
-			if( d0 < d1 * NN_SQ_DIST_RATIO_THR )
-			{
-				pt1 = cvPoint( cvRound( feat->x ), cvRound( feat->y ) );
-				pt2 = cvPoint( cvRound( nbrs[0]->x ), cvRound( nbrs[0]->y ) );
-
-				//---------�洢���������굽��������----------
-				cvSeqPush(up_seq,&pt1); 
-				cvSeqPush(down_seq,&pt2);
-
-				pt2.y += img1->height;
-				cvLine( stacked, pt1, pt2, CV_RGB(255,0,255), 1, 8, 0 );
-				m++;
-				feat1[i].fwd_match = nbrs[0];
-			}
-		}
-
-		free( nbrs );
-	}
+    MatchSiftFeats(&kd_root, feat1, n1, feat2, n2, up_seq, down_seq, img1->height);
 
 	CvMat *transMat = 0;  // perspective transformation matrix
 	struct feature **inliers;
 	int    nin;
 
-	transMat = ransac_xform( feat1, n1, FEATURE_FWD_MATCH, lsq_homog, 4, 0.5, homog_xfer_err, 3.0, &inliers, &nin);
+	transMat = ransac_xform(feat1, n1, FEATURE_FWD_MATCH, lsq_homog, 4, 0.5, homog_xfer_err, 3.0, &inliers, &nin);
 	resize_img();
 
     //cvSaveImage("matchedfeat.jpg", stacked);
@@ -210,6 +288,9 @@ int main( int argc, char** argv )
         printf("Sorry. No homography is found!\n");
         return 0;
     }
+
+    gpc_polygon intersect;
+    IntersectTwoImages(&intersect, img1, img2, transMat);
 
 	CvPoint   nc[4];
 	CvPoint   upLeft, downRight;
@@ -257,50 +338,8 @@ int main( int argc, char** argv )
 	// Transform img1 to align with img2, then shift it
 	warp_by_matrix<unsigned char>(img1, transImg, transMat, shift1);
 
-	IplImage *simg; //, *img1Bands[3], *transBands[3];
-
-// 	simg          = cvCreateImage(cvGetSize(img1), IPL_DEPTH_16S, img1->nChannels);
-// 	img1Bands[0]  = cvCreateImage(cvGetSize(img1), IPL_DEPTH_16S, img1->nChannels);
-// 	img1Bands[1]  = cvCreateImage(cvGetSize(img1), IPL_DEPTH_16S, img1->nChannels);
-// 	img1Bands[2]  = cvCreateImage(cvGetSize(img1), IPL_DEPTH_16S, img1->nChannels);
-// 	transBands[0] = cvCreateImage(sz, IPL_DEPTH_16S, img1->nChannels);
-// 	transBands[1] = cvCreateImage(sz, IPL_DEPTH_16S, img1->nChannels);
-// 	transBands[2] = cvCreateImage(sz, IPL_DEPTH_16S, img1->nChannels);
-
-// 	cvConvert(img1, simg);
-// 	cvSmooth(simg, img1Bands[2], CV_GAUSSIAN, 3, 3);
-// 	cvSub(simg, img1Bands[2], img1Bands[0]); // Band 1
-// 	cvSmooth(img1Bands[2], simg, CV_GAUSSIAN, 7, 7);
-// 	cvSub(img1Bands[2], simg, img1Bands[1]); // Band 2
-// 	cvCopy(simg, img1Bands[2]); // Band 3
-
-// 	cvReleaseImage(&simg);
-
-// 	warp_by_matrix<short>(img1Bands[0], transBands[0], transMat, shift1);
-// 	warp_by_matrix<short>(img1Bands[0], transBands[0], transMat, shift1);
-// 	warp_by_matrix<short>(img1Bands[1], transBands[1], transMat, shift1);
-// 	warp_by_matrix<short>(img1Bands[1], transBands[1], transMat, shift1);
-// 	warp_by_matrix<short>(img1Bands[2], transBands[2], transMat, shift1);
-// 	warp_by_matrix<short>(img1Bands[2], transBands[2], transMat, shift1);
-
-// 	IplImage *img2Bands[3];
-// 	simg         = cvCreateImage(cvGetSize(img2), IPL_DEPTH_16S, img2->nChannels);
-// 	img2Bands[0] = cvCreateImage(cvGetSize(img2), IPL_DEPTH_16S, img2->nChannels);
-// 	img2Bands[1] = cvCreateImage(cvGetSize(img2), IPL_DEPTH_16S, img2->nChannels);
-// 	img2Bands[2] = cvCreateImage(cvGetSize(img2), IPL_DEPTH_16S, img2->nChannels);
-
-// 	cvConvert(img2, simg);
-// 	cvSmooth(simg, img2Bands[2], CV_GAUSSIAN, 3, 3);
-// 	cvSub(simg, img2Bands[2], img2Bands[0]); // Band 1
-// 	cvSmooth(img2Bands[2], simg, CV_GAUSSIAN, 7, 7);
-// 	cvSub(img2Bands[2], simg, img2Bands[1]); // Band 2
-// 	cvCopy(simg, img2Bands[2]); // Band 3
-
-// 	cvReleaseImage(&simg);
-
 	IplImage  *imagePart1;
 	IplImage  *imagePart2;
-	CvMat     *affineTrans;
 	IplImage  *stitchedImage;
 	IplImage  *stitchedImage2;
 	CvPoint   shift_t;
@@ -345,7 +384,6 @@ int main( int argc, char** argv )
 	stitchedImage2  = cvCreateImage(sz, img1->depth, img1->nChannels);
 	imagePart1      = cvCreateImage(sz, img1->depth, img1->nChannels);
 	imagePart2      = cvCreateImage(sz, img1->depth, img1->nChannels);
-	affineTrans     = cvCreateMat(2, 3, CV_64FC1);
 
 	shift_t.x = -shift1.x + shift2.x;
 	shift_t.y = -shift1.y + shift2.y;
@@ -354,105 +392,16 @@ int main( int argc, char** argv )
 	// Because transImg is already shifted by shift1 to make sure that there are no negative image coordinates,
 	// so we have to shift it back by shift1, then shift it by shift2 which is used to make sure there are no
 	// negative image coordinates in the new stitchedImg
-	cvSetReal2D(affineTrans, 0, 0, 1.0);
-	cvSetReal2D(affineTrans, 0, 1, 0.0);
-	cvSetReal2D(affineTrans, 0, 2, -shift1.x + shift2.x);
-	cvSetReal2D(affineTrans, 1, 0, 0.0);
-	cvSetReal2D(affineTrans, 1, 1, 1.0);
-	cvSetReal2D(affineTrans, 1, 2, -shift1.y + shift2.y);
-	//cvWarpAffine(transImg, imagePart1, affineTrans, CV_INTER_LINEAR+CV_WARP_FILL_OUTLIERS);
 	shift_image<unsigned char>(transImg, imagePart1, shift_t);
-
-// 	IplImage *imagePart1Bands[3];
-// 	imagePart1Bands[0]  = cvCreateImage(cvGetSize(imagePart1), IPL_DEPTH_16S, img1->nChannels);
-// 	imagePart1Bands[1]  = cvCreateImage(cvGetSize(imagePart1), IPL_DEPTH_16S, img1->nChannels);
-// 	imagePart1Bands[2]  = cvCreateImage(cvGetSize(imagePart1), IPL_DEPTH_16S, img1->nChannels);
-// 	shift_image<short>(transBands[0], imagePart1Bands[0], shift_t);
-// 	shift_image<short>(transBands[1], imagePart1Bands[1], shift_t);
-// 	shift_image<short>(transBands[2], imagePart1Bands[2], shift_t);
-
-	// Map the second image
-	cvSetReal2D(affineTrans, 0, 0, 1.0);
-	cvSetReal2D(affineTrans, 0, 1, 0.0);
-	cvSetReal2D(affineTrans, 0, 2, shift2.x);
-	cvSetReal2D(affineTrans, 1, 0, 0.0);
-	cvSetReal2D(affineTrans, 1, 1, 1.0);
-	cvSetReal2D(affineTrans, 1, 2, shift2.y);
-	//cvWarpAffine(img2, imagePart2, affineTrans, CV_INTER_LINEAR+CV_WARP_FILL_OUTLIERS);
 
 	shift_t.x = shift2.x;
 	shift_t.y = shift2.y;
 	shift_image<unsigned char>(img2, imagePart2, shift_t);
 
-// 	IplImage *imagePart2Bands[3];
-// 	imagePart2Bands[0]  = cvCreateImage(cvGetSize(imagePart1), IPL_DEPTH_16S, img1->nChannels);
-// 	imagePart2Bands[1]  = cvCreateImage(cvGetSize(imagePart1), IPL_DEPTH_16S, img1->nChannels);
-// 	imagePart2Bands[2]  = cvCreateImage(cvGetSize(imagePart1), IPL_DEPTH_16S, img1->nChannels);
-// 	shift_image<short>(img2Bands[0], imagePart2Bands[0], shift_t);
-// 	shift_image<short>(img2Bands[1], imagePart2Bands[1], shift_t);
-// 	shift_image<short>(img2Bands[2], imagePart2Bands[2], shift_t);
-
 	OverlayImages(imagePart1, 0.5, imagePart2, 0.5, stitchedImage);
-// 	cvSaveImage("part1.bmp", imagePart1);
-// 	cvSaveImage("part2.bmp", imagePart2);
-
-// 	IplImage *map       = cvCreateImage(cvGetSize(imagePart2), IPL_DEPTH_8U, 1);
-// 	IplImage *map_blur  = cvCreateImage(cvGetSize(imagePart2), IPL_DEPTH_8U, 1);
-
-// 	unsigned char *ptr_2, *ptr_map;
-
-// 	// Calculate the region filled by image part2
-// 	for (i=0; i<imagePart2->height; i++)
-// 	{
-// 		ptr_2    = (unsigned char *)(imagePart2->imageData + i*imagePart2->widthStep);
-// 		ptr_map  = (unsigned char *)(map->imageData + i*map->widthStep);
-
-// 		for (j=0; j<imagePart2->width; j++)
-// 		{
-// 			if (ptr_2[0] != 0 ||
-// 				ptr_2[1] != 0 ||
-// 				ptr_2[2] != 0) {
-				
-// 				*ptr_map = 255;
-// 			} else {
-// 				*ptr_map = 0;
-// 			}
-
-// 			ptr_2   += imagePart2->nChannels;
-// 			ptr_map += 1;
-// 		}
-// 	}
-
-// 	cvSmooth(map, map_blur, CV_GAUSSIAN, 7, 7);
-
-// 	IplImage *stitchBands[3], *stitchInTotal;
-
-// 	stitchBands[0] = cvCreateImage(cvGetSize(imagePart2Bands[0]), IPL_DEPTH_16S, imagePart2Bands[0]->nChannels);
-// 	stitchBands[1] = cvCreateImage(cvGetSize(imagePart2Bands[1]), IPL_DEPTH_16S, imagePart2Bands[1]->nChannels);
-// 	stitchBands[2] = cvCreateImage(cvGetSize(imagePart2Bands[2]), IPL_DEPTH_16S, imagePart2Bands[2]->nChannels);
-// 	stitchInTotal  = cvCreateImage(cvGetSize(imagePart2Bands[2]), IPL_DEPTH_16S, imagePart2Bands[2]->nChannels);
-
-// 	blend_images<short>(imagePart2Bands[2], imagePart1Bands[2], map_blur, stitchBands[2]);
-// 	blend_images<short>(imagePart2Bands[1], imagePart1Bands[1], map, stitchBands[1]);
-// 	blend_images<short>(imagePart2Bands[0], imagePart1Bands[0], map, stitchBands[0]);
-
-// 	cvZero(stitchInTotal);
-// 	cvAdd(stitchInTotal, stitchBands[2], stitchInTotal);
-// 	cvAdd(stitchInTotal, stitchBands[1], stitchInTotal);
-// 	cvAdd(stitchInTotal, stitchBands[0], stitchInTotal);
-
-// 	cvConvert(stitchInTotal, stitchedImage2);
-
-// 	cvNamedWindow("map");
-// 	cvShowImage("map", map);
-// 	cvNamedWindow("map_blur");
-// 	cvShowImage("map_blur", map_blur);
 	cvNamedWindow("Stitched");
 	cvShowImage("Stitched", stitchedImage);
 	cvSaveImage("stitched.jpg", stitchedImage);
-// 	cvNamedWindow("Stitched2");
-// 	cvShowImage("Stitched2", stitchedImage2);
-// 	cvSaveImage("stitched2.jpg", stitchedImage2);
 
 	cvWaitKey(0);
 
