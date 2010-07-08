@@ -188,15 +188,18 @@ int IntersectTwoImages(gpc_polygon *intersect,
         img2VertLst[i].y = cvGetReal1D(resltVector, 1);
     }
 
-    int poly1Fd, poly2Fd;
-    char tmpFlTmplt1[] = "poly_XXXXXX";
-    char tmpFlTmplt2[] = "poly_XXXXXX";
+    //int poly1Fd, poly2Fd;
+    //char tmpFlTmplt1[] = "poly_XXXXXX";
+    //char tmpFlTmplt2[] = "poly_XXXXXX";
     FILE *poly1Fp, *poly2Fp;
 
-    poly1Fd = mkstemp(tmpFlTmplt1);
-    poly2Fd = mkstemp(tmpFlTmplt2);
-    poly1Fp = fdopen(poly1Fd, "w+");
-    poly2Fp = fdopen(poly2Fd, "w+");
+    //poly1Fd = mkstemp(tmpFlTmplt1);
+    //poly2Fd = mkstemp(tmpFlTmplt2);
+    //poly1Fp = fdopen(poly1Fd, "w+");
+    //poly2Fp = fdopen(poly2Fd, "w+");
+    
+    poly1Fp = fopen("poly1_vertices", "w+");
+    poly2Fp = fopen("poly2_vertices", "w+");
 
     fprintf(poly1Fp, "%d\n", 1);
     fprintf(poly1Fp, "%d\n", 4);
