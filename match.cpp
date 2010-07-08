@@ -216,6 +216,9 @@ int IntersectTwoImages(gpc_polygon *intersect,
 
     gpc_polygon_clip(GPC_INT, &img1Bound, &invImg2Bound, intersect);
 
+    FILE *intFp = fopen("poly_inter", "w");
+    gpc_write_polygon(intFp, 0, intersect);
+
     cvReleaseMat(&invTransMat);
     cvReleaseMat(&tmpVector);
     cvReleaseMat(&resltVector);
