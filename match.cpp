@@ -235,6 +235,140 @@ int IntersectTwoImages(gpc_polygon *intersect,
 }
 
 
+int FindContainRect(CvRect *rect, const gpc_polygon *intersect, const CvSize *img1Sz)
+{
+    double upLeft[2], downRight[2];
+    upLeft[0] = img1Sz->width;
+    upLeft[1] = img1Sz->height;
+    downRight[0] = 0;
+    downRight[1] = 0;
+
+    assert(intersect->num_contours > 0);
+
+    int i;
+    int numVertices = intersect->contour->num_vertices;
+    gpc_vertex *pVertices = intersect->contour->vertex;
+    for (i=0; i<numVertices; i++)
+    {
+        if (pVertices[i].x < upLeft[0])
+            upLeft[0] = pVertices[i].x;
+        if (pVertices[i].y < upLeft[1])
+            upLeft[1] = pVertices[i].y;
+
+        if (pVertices[i].x > downRight[0])
+            downRight[0] = pVertices[i].x;
+        if (pVertices[i].y > downRight[1])
+            downRight[1] = pVertices[i].y;
+    }
+
+    // Must be in img1
+    if (upLeft[0] < 0.0)
+        upLeft[0] = 0;
+    if (upLeft[1] < 0.0)
+        upLeft[1] = 0;
+    if (downRight[0] > img1Sz->width)
+        downRight[0] = img1Sz->width;
+    if (downRight[1] > img1Sz->height)
+        downRight[1] = img1Sz->height;
+
+    rect.x = (int)upLeft[0];
+    rect.y = (int)upLeft[1];
+    int intPart = (int)downRight[0];
+    rect.width = intPart + (((downRight[0]-intPart) > 0.0)?1:0);
+    intPart     = (int)downRight[1];
+    rect.height= intPart + (((downRight[1]-intPart) > 0.0)?1:0);
+
+    return 0;
+}
+
+
+int MapRoi(CvMat *rslt, 
+           const CvRect *roi, const CvMat *transMat, const CvSize *img2Sz)
+{
+    int i, j;
+    int num;
+    double *dbMat;
+
+    assert(transMat->type == CV_64FC1);
+
+    num = 0;
+    dbMat = transMat->data.db;
+    for (i=roi.y; i<roi.y+roi.height; i++)
+    {
+        for (j=roi.x; j<roi.x+roi.width; j++)
+        {
+            double c1, c2, c3;
+            c1 = dbMat[0]*j + dbMat[1]*i + dbMat[2];
+            c2 = dbMat[3]*j + dbMat[4]*i + dbMat[5];
+            c3 = dbMat[6]*j + dbMat[7]*i + dbMat[8];
+
+            cvSetReal3D(i, j, 0, c1);
+            cvSetReal3D(i, j, 1, c2);
+            cvSetReal3D(i, j, 2, c3);
+
+            c1 /= c3;
+            c2 /= c3;
+            c3 = 1.0;
+
+            if (c1 < 0 || c1 > (img2Sz.width -1) ||
+                c2 < 0 || c2 > (img2Sz.height-1))
+            {
+                cvSetReal3D(i, j, 2, 0.0);
+            }
+            else
+            {
+                num += 1;
+            }
+        }
+    }
+
+    return num;
+}
+
+
+int ImproveThroughIteration(CvMat *transMat, const IplImage *img1, const IplImage *img2)
+{
+    double norm;
+    vector<double> residual;
+    CvRect roi;
+    CvSize img1Sz, img2Sz;
+    
+    // convert CvMat to a vector
+    double mat33 = cvGetReal2D(transMat, 2, 2);
+    int    i;
+    for (i=0; i<8; i++)
+    {
+        double elmt = cvGetReal2D(transMat, i/3, i%3);
+        cvSetReal2D(transMat, i/3, i%3, elmt/mat33);
+    }
+    cvSetReal2D(transMat, 2, 2, 1.0);
+
+    // calculate gradient in x and y direction
+    img2Sz = cvGetSize(img2);
+    IplImage *img2dx = cvCreateMat(img2Sz, IPL_DEPTH_64F, 1);
+    IplImage *img2dy = cvCreateMat(img2Sz, IPL_DEPTH_64F, 1);
+    cvSobel(img2, img2dx, 1, 0, 3);
+    cvSobel(img2, img2dy, 0, 1, 3);
+
+    img1Sz = cvGetSize(img1);
+    while(1)
+    {
+        residual.empty();
+
+        gpc_polygon intersect;
+        IntersectTwoImages(&intersect, img1, img2, transMat);
+        
+        FindContainRect(&roi, &intersect, &img1Sz);
+
+        
+    }
+
+    cvReleaseMat(&paramMat);
+    cvReleaseImage(&img2dx);
+    cvReleaseImage(&img2dy);
+}
+
+
 int main( int argc, char** argv )
 {
 
@@ -314,8 +448,9 @@ int main( int argc, char** argv )
         return 0;
     }
 
-    gpc_polygon intersect;
-    IntersectTwoImages(&intersect, img1, img2, transMat);
+    //gpc_polygon intersect;
+    //IntersectTwoImages(&intersect, img1, img2, transMat);
+
 
 	CvPoint   nc[4];
 	CvPoint   upLeft, downRight;
