@@ -10,7 +10,7 @@
 NAME=   sift-stitch
 
 ### include debug information: 1=yes, 0=no
-DBG?= 0
+DBG?= 1
 ### include MMX optimization : 1=yes, 0=no
 M32?= 0
 
@@ -32,12 +32,12 @@ endif
 
 LIBS=   -lm $(shell pkg-config --libs opencv) $(shell gsl-config --libs)
 AFLAGS=  
-CFLAGS= -g -O0 $(shell pkg-config --cflags opencv) $(shell gsl-config --cflags)
+CFLAGS= $(shell pkg-config --cflags opencv) $(shell gsl-config --cflags)
 FLAGS=  $(CFLAGS) -Wall -I$(INCDIR) -I$(ADDINCDIR)
 
 ifeq ($(DBG),1)
-SUFFIX= .dbg
-FLAGS+= -g
+SUFFIX=
+FLAGS+= -g -O0
 else
 SUFFIX=
 FLAGS+= -O3
@@ -78,14 +78,14 @@ tags:
 $(BIN):    $(OBJ)
 	@echo
 	@echo 'creating binary "$(BIN)"'
-	$(CC) $(AFLAGS) -o $(BIN) $(OBJ) $(LIBS)
+	$(CC) $(FLAGS) -o $(BIN) $(OBJ) $(LIBS)
 	@echo '... done'
 	@echo
 
 $(DEPEND): $(SRC)
 	@echo
 	@echo 'checking dependencies'
-	$(SHELL) -ec '$(CC) $(AFLAGS) -MM $(CFLAGS) -I$(INCDIR) -I$(ADDINCDIR) $(SRC) $(ADDSRC)                  \
+	$(SHELL) -ec '$(CC) $(AFLAGS) -MM $(FLAGS) -I$(INCDIR) -I$(ADDINCDIR) $(SRC) $(ADDSRC)                  \
          | sed '\''s@\(.*\)\.o[ :]@$(OBJDIR)/\1.o$(SUFFIX):@g'\''               \
          >$(DEPEND)'
 	@echo

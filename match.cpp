@@ -16,6 +16,7 @@
 #include <stdlib.h>
 #include <math.h>
 #include <float.h>
+#include <vector>
 
 #ifdef _DEBUG
 #define COMPLAIN_OUT_OF_BOUND 0
@@ -82,39 +83,39 @@ int MatchSiftFeats(struct kd_node **ppKdRoot,
         int    img1Height)
 {
     struct feature   *feat;
-	struct feature** nbrs;
-	CvPoint pt1, pt2;
+    struct feature** nbrs;
+    CvPoint pt1, pt2;
 
     int i, k, m=0;
     double d0, d1;
 
-	*ppKdRoot = kdtree_build( pFeat2, n2 );
+    *ppKdRoot = kdtree_build( pFeat2, n2 );
 
-	for( i = 0; i < n1; i++ )
-	{
-		feat = pFeat1 + i;
-		k = kdtree_bbf_knn( *ppKdRoot, feat, 2, &nbrs, KDTREE_BBF_MAX_NN_CHKS );
-		if( k == 2 )
-		{
-			d0 = descr_dist_sq( feat, nbrs[0] );
-			d1 = descr_dist_sq( feat, nbrs[1] );
-			if( d0 < d1 * NN_SQ_DIST_RATIO_THR )
-			{
-				pt1 = cvPoint( cvRound( feat->x ), cvRound( feat->y ) );
-				pt2 = cvPoint( cvRound( nbrs[0]->x ), cvRound( nbrs[0]->y ) );
+    for( i = 0; i < n1; i++ )
+    {
+        feat = pFeat1 + i;
+        k = kdtree_bbf_knn( *ppKdRoot, feat, 2, &nbrs, KDTREE_BBF_MAX_NN_CHKS );
+        if( k == 2 )
+        {
+            d0 = descr_dist_sq( feat, nbrs[0] );
+            d1 = descr_dist_sq( feat, nbrs[1] );
+            if( d0 < d1 * NN_SQ_DIST_RATIO_THR )
+            {
+                pt1 = cvPoint( cvRound( feat->x ), cvRound( feat->y ) );
+                pt2 = cvPoint( cvRound( nbrs[0]->x ), cvRound( nbrs[0]->y ) );
 
-				cvSeqPush(pUpSeq,  &pt1); 
-				cvSeqPush(pDownSeq,&pt2);
+                cvSeqPush(pUpSeq,  &pt1); 
+                cvSeqPush(pDownSeq,&pt2);
 
-				pt2.y += img1Height;
-				cvLine( stacked, pt1, pt2, CV_RGB(255,0,255), 1, 8, 0 );
-				m++;
-				pFeat1[i].fwd_match = nbrs[0];
-			}
-		}
+                pt2.y += img1Height;
+                cvLine( stacked, pt1, pt2, CV_RGB(255,0,255), 1, 8, 0 );
+                m++;
+                pFeat1[i].fwd_match = nbrs[0];
+            }
+        }
 
-		free( nbrs );
-	}
+        free( nbrs );
+    }
 
     return 0;
 }
@@ -271,14 +272,36 @@ int FindContainRect(CvRect *rect, const gpc_polygon *intersect, const CvSize *im
     if (downRight[1] > img1Sz->height)
         downRight[1] = img1Sz->height;
 
-    rect.x = (int)upLeft[0];
-    rect.y = (int)upLeft[1];
-    int intPart = (int)downRight[0];
-    rect.width = intPart + (((downRight[0]-intPart) > 0.0)?1:0);
-    intPart     = (int)downRight[1];
-    rect.height= intPart + (((downRight[1]-intPart) > 0.0)?1:0);
+    rect->x = (int)upLeft[0];
+    rect->y = (int)upLeft[1];
+    rect->width  = ceil(downRight[0]) - rect->x;
+    rect->height = ceil(downRight[1]) - rect->y;
 
     return 0;
+}
+
+
+inline double InterpImgGrayScale(const CvMat *pImgMat, double dr, double dc)
+{
+    double coffRight, coffLeft;
+    double coffUp, coffDown;
+
+    int tmpx, tmpy;
+    tmpx      = floor(dc);
+    coffLeft  = dc - tmpx;
+    coffRight = 1.0 - coffLeft;
+
+    tmpy      = floor(dr);
+    coffUp    = dr - tmpy;
+    coffDown  = 1.0 - coffUp;
+
+    double rslt = 0.0;
+    rslt += cvGetReal2D(pImgMat, tmpy, tmpx)*coffRight*coffDown;
+    rslt += cvGetReal2D(pImgMat, tmpy+1, tmpx)*coffRight*coffUp;
+    rslt += cvGetReal2D(pImgMat, tmpy, tmpx+1)*coffLeft*coffDown;
+    rslt += cvGetReal2D(pImgMat, tmpy+1, tmpx+1)*coffLeft*coffUp;
+
+    return rslt;
 }
 
 
@@ -289,31 +312,38 @@ int MapRoi(CvMat *rslt,
     int num;
     double *dbMat;
 
-    assert(transMat->type == CV_64FC1);
+    int depth, cn;
+    depth = CV_MAT_DEPTH(transMat->type);
+    cn    = CV_MAT_CN(transMat->type);
+    assert(depth == CV_64F);
+    assert(cn == 1);
 
     num = 0;
     dbMat = transMat->data.db;
-    for (i=roi.y; i<roi.y+roi.height; i++)
+    for (i=0; i<roi->height; i++)
     {
-        for (j=roi.x; j<roi.x+roi.width; j++)
+        for (j=0; j<roi->width; j++)
         {
             double c1, c2, c3;
-            c1 = dbMat[0]*j + dbMat[1]*i + dbMat[2];
-            c2 = dbMat[3]*j + dbMat[4]*i + dbMat[5];
-            c3 = dbMat[6]*j + dbMat[7]*i + dbMat[8];
+            c1 = dbMat[0]*(j+roi->x) + dbMat[1]*(i+roi->y) + dbMat[2];
+            c2 = dbMat[3]*(j+roi->x) + dbMat[4]*(i+roi->y) + dbMat[5];
+            c3 = dbMat[6]*(j+roi->x) + dbMat[7]*(i+roi->y) + dbMat[8];
 
-            cvSetReal3D(i, j, 0, c1);
-            cvSetReal3D(i, j, 1, c2);
-            cvSetReal3D(i, j, 2, c3);
+            CvScalar elmt;
+            elmt.val[0] = c1;
+            elmt.val[1] = c2;
+            elmt.val[2] = c3;
+            cvSet2D(rslt, i, j, elmt);
 
             c1 /= c3;
             c2 /= c3;
             c3 = 1.0;
 
-            if (c1 < 0 || c1 > (img2Sz.width -1) ||
-                c2 < 0 || c2 > (img2Sz.height-1))
+            if (c1 < 0 || c1 > (img2Sz->width -1) ||
+                c2 < 0 || c2 > (img2Sz->height-1))
             {
-                cvSetReal3D(i, j, 2, 0.0);
+                double *elmt = (double *)cvPtr2D(rslt, i, j, NULL);
+                elmt[2] = 0.0;
             }
             else
             {
@@ -326,14 +356,202 @@ int MapRoi(CvMat *rslt,
 }
 
 
-int ImproveThroughIteration(CvMat *transMat, const IplImage *img1, const IplImage *img2)
+int CalcNewtonVector(CvMat *pNewtonVect, double *pErr,
+        const IplImage *img1,   const IplImage *img2, 
+        const IplImage *img2dx, const IplImage *img2dy, 
+        const IplImage *img2dxdx,
+        const IplImage *img2dydy,
+        const IplImage *img2dxdy,
+        const CvRect *pRoi,     
+        const CvMat  *pProjRslt,
+        int   validNum)
 {
-    double norm;
-    vector<double> residual;
+    int i, j;
+    *pErr = 0.0;
+
+    CvMat img1Mat, img2Mat;
+    cvGetMat(img1, &img1Mat, NULL, NULL);
+    cvGetMat(img2, &img2Mat, NULL, NULL);
+    
+    CvMat img2dxMat, img2dyMat;
+    cvGetMat(img2dx, &img2dxMat, NULL, NULL);
+    cvGetMat(img2dy, &img2dyMat, NULL, NULL);
+
+    CvMat img2dxdxMat, img2dydyMat, img2dxdyMat;
+    cvGetMat(img2dxdx, &img2dxdxMat, NULL, NULL);
+    cvGetMat(img2dxdy, &img2dxdyMat, NULL, NULL);
+    cvGetMat(img2dydy, &img2dydyMat, NULL, NULL);
+
+    CvMat *pDx2Da =   cvCreateMat(8, 1, CV_64FC1);
+    CvMat *pDy2Da =   cvCreateMat(8, 1, CV_64FC1);
+    CvMat *pDx2DaDa = cvCreateMat(8, 8, CV_64FC1);
+    CvMat *pDy2DaDa = cvCreateMat(8, 8, CV_64FC1);
+
+    CvMat *pGradnt  = cvCreateMat(8, 1, CV_64FC1);
+    CvMat *pSecDerv = cvCreateMat(8, 8, CV_64FC1);
+    CvMat *pInterim = cvCreateMat(8, 1, CV_64FC1);
+
+    cvSetZero(pNewtonVect);
+    cvSetZero(pGradnt);
+    cvSetZero(pSecDerv);
+
+    for (i=pRoi->y; i<pRoi->y+pRoi->height; i++)
+    {
+        for (j=pRoi->x; j<pRoi->x+pRoi->width; j++)
+        {
+            int r, c;
+            r = i - pRoi->y;
+            c = j - pRoi->x;
+
+            double dx, dy, dz;
+            CvScalar projElmt = cvGet2D(pProjRslt, r, c);
+            dx = projElmt.val[0];
+            dy = projElmt.val[1];
+            dz = projElmt.val[2];
+            if (0.0 == dz)
+                continue;
+
+            double nx, ny;
+            nx = dx / dz;
+            ny = dy / dz;
+
+            cvZero(pDx2Da);
+            cvZero(pDy2Da);
+
+            double grayScaleDiff;
+            grayScaleDiff = cvGetReal2D(&img1Mat, i, j) 
+                - InterpImgGrayScale(&img2Mat, ny, nx);
+
+            double img2Dx, img2Dy;
+            img2Dx = InterpImgGrayScale(&img2dxMat, ny, nx); 
+            img2Dy = InterpImgGrayScale(&img2dyMat, ny, nx);
+
+            double img2DxDx, img2DyDy, img2DxDy;
+            img2DxDx = InterpImgGrayScale(&img2dxdxMat, ny, nx);
+            img2DyDy = InterpImgGrayScale(&img2dydyMat, ny, nx);
+            img2DxDy = InterpImgGrayScale(&img2dxdyMat, ny, nx);
+
+            // First calculate dx_2/dA
+            cvSetReal1D(pDx2Da, 0, j/dz);
+            cvSetReal1D(pDx2Da, 1, i/dz);
+            cvSetReal1D(pDx2Da, 2, 1.0/dz);
+            cvSetReal1D(pDx2Da, 3, 0.0);
+            cvSetReal1D(pDx2Da, 4, 0.0);
+            cvSetReal1D(pDx2Da, 5, 0.0);
+            cvSetReal1D(pDx2Da, 6, -dx*j/dz/dz);
+            cvSetReal1D(pDx2Da, 7, -dx*i/dz/dz);
+            
+            // Second calculate dy_2/dA
+            cvSetReal1D(pDy2Da, 0, 0.0);
+            cvSetReal1D(pDy2Da, 1, 0.0);
+            cvSetReal1D(pDy2Da, 2, 0.0);
+            cvSetReal1D(pDy2Da, 3, j/dz);
+            cvSetReal1D(pDy2Da, 4, i/dz);
+            cvSetReal1D(pDy2Da, 5, 1.0/dz);
+            cvSetReal1D(pDy2Da, 6, -dy*j/dz/dz);
+            cvSetReal1D(pDy2Da, 7, -dy*i/dz/dz);
+
+            // Third calculate d^2x_2/dAdA
+            cvZero(pDx2DaDa);
+            cvSetReal2D(pDx2DaDa, 0, 6, -j*j/dz/dz);
+            cvSetReal2D(pDx2DaDa, 1, 6, -j*i/dz/dz);
+            cvSetReal2D(pDx2DaDa, 2, 6, -j/dz/dz);
+            cvSetReal2D(pDx2DaDa, 0, 7, -j*i/dz/dz);
+            cvSetReal2D(pDx2DaDa, 1, 7, -i*i/dz/dz);
+            cvSetReal2D(pDx2DaDa, 2, 7, -i/dz/dz);
+            cvSetReal2D(pDx2DaDa, 6, 0, -j*j/dz/dz);
+            cvSetReal2D(pDx2DaDa, 6, 1, -j*i/dz/dz);
+            cvSetReal2D(pDx2DaDa, 6, 2, -j/dz/dz);
+            cvSetReal2D(pDx2DaDa, 7, 0, -j*i/dz/dz);
+            cvSetReal2D(pDx2DaDa, 7, 1, -i*i/dz/dz);
+            cvSetReal2D(pDx2DaDa, 7, 2, -i/dz/dz);
+            cvSetReal2D(pDx2DaDa, 6, 6, 2*dx*j*j/dz/dz/dz);
+            cvSetReal2D(pDx2DaDa, 6, 7, 2*dx*j*i/dz/dz/dz);
+            cvSetReal2D(pDx2DaDa, 7, 6, 2*dx*j*i/dz/dz/dz);
+            cvSetReal2D(pDx2DaDa, 7, 7, 2*dx*i*i/dz/dz/dz);
+
+            // Third calculate d^2x_2/dAdA
+            cvZero(pDy2DaDa);
+            cvSetReal2D(pDy2DaDa, 3, 6, -j*j/dz/dz);
+            cvSetReal2D(pDy2DaDa, 4, 6, -j*i/dz/dz);
+            cvSetReal2D(pDy2DaDa, 5, 6, -j/dz/dz);
+            cvSetReal2D(pDy2DaDa, 3, 7, -j*i/dz/dz);
+            cvSetReal2D(pDy2DaDa, 4, 7, -i*i/dz/dz);
+            cvSetReal2D(pDy2DaDa, 5, 7, -i/dz/dz);
+            cvSetReal2D(pDy2DaDa, 6, 3, -j*j/dz/dz);
+            cvSetReal2D(pDy2DaDa, 6, 4, -j*i/dz/dz);
+            cvSetReal2D(pDy2DaDa, 6, 5, -j/dz/dz);
+            cvSetReal2D(pDy2DaDa, 7, 3, -j*i/dz/dz);
+            cvSetReal2D(pDy2DaDa, 7, 4, -i*i/dz/dz);
+            cvSetReal2D(pDy2DaDa, 7, 5, -i/dz/dz);
+            cvSetReal2D(pDy2DaDa, 6, 6, 2*dy*j*j/dz/dz/dz);
+            cvSetReal2D(pDy2DaDa, 6, 7, 2*dy*j*i/dz/dz/dz);
+            cvSetReal2D(pDy2DaDa, 7, 6, 2*dy*j*i/dz/dz/dz);
+            cvSetReal2D(pDy2DaDa, 7, 7, 2*dy*i*i/dz/dz/dz);
+            
+            // Need -2.0*grayScaleDiff/validNum later
+            cvAddWeighted(pDx2Da, img2Dx, 
+                    pDy2Da, img2Dy,
+                    0, pInterim);
+            // Gradient
+            cvAddWeighted(pGradnt, 1, pInterim, -2.0*grayScaleDiff/validNum, 0, pGradnt); 
+            // Hessian matrix
+            cvGEMM(pInterim, pInterim, -2.0/validNum, 
+                    pSecDerv, 1, pSecDerv, CV_GEMM_B_T);
+            cvGEMM(pDx2Da,   pDx2Da,   -2.0*grayScaleDiff*img2DxDx/validNum, 
+                    pSecDerv, 1, pSecDerv, CV_GEMM_B_T); 
+            cvGEMM(pDy2Da,   pDx2Da,   -2.0*grayScaleDiff*img2DxDy/validNum,
+                    pSecDerv, 1, pSecDerv, CV_GEMM_B_T);
+            cvAddWeighted(pSecDerv, 1, pDx2DaDa, -2.0*grayScaleDiff*img2Dx/validNum, 0, pSecDerv);
+            cvGEMM(pDx2Da,   pDy2Da,   -2.0*grayScaleDiff*img2DxDy/validNum,
+                    pSecDerv, 1, pSecDerv, CV_GEMM_B_T);
+            cvGEMM(pDy2Da,   pDy2Da,   -2.0*grayScaleDiff*img2DyDy/validNum,
+                    pSecDerv, 1, pSecDerv, CV_GEMM_B_T);
+            cvAddWeighted(pSecDerv, 1, pDy2DaDa, -2.0*grayScaleDiff*img2Dy/validNum, 0, pSecDerv);
+            
+            *pErr += grayScaleDiff*grayScaleDiff/validNum;
+        }
+    }
+
+    cvInvert(pSecDerv, pSecDerv, CV_SVD);   
+    cvMatMul(pSecDerv, pGradnt,  pNewtonVect);
+
+    cvReleaseMat(&pDx2Da);
+    cvReleaseMat(&pDy2Da);
+    cvReleaseMat(&pDx2DaDa);
+    cvReleaseMat(&pDy2DaDa);
+    cvReleaseMat(&pGradnt);
+    cvReleaseMat(&pSecDerv);
+    cvReleaseMat(&pInterim);
+
+    return 0;
+}
+
+
+void UpdateTransMat(CvMat *pTransMat, const CvMat *pVect, const double step)
+{
+   int i; 
+
+   // Only first 8 elements need modification
+   for (i=0; i<8; i++)
+   {
+       int r = i/3;
+       int c = i%3;
+
+       double elmt;
+       elmt =  cvGetReal2D(pTransMat, r, c);
+       elmt += -step*cvGetReal1D(pVect, i);
+
+       cvSetReal2D(pTransMat, r, c, elmt);
+   }
+}
+
+
+double ImproveThroughIteration(CvMat *transMat, const IplImage *img1, const IplImage *img2)
+{
     CvRect roi;
     CvSize img1Sz, img2Sz;
     
-    // convert CvMat to a vector
     double mat33 = cvGetReal2D(transMat, 2, 2);
     int    i;
     for (i=0; i<8; i++)
@@ -343,286 +561,362 @@ int ImproveThroughIteration(CvMat *transMat, const IplImage *img1, const IplImag
     }
     cvSetReal2D(transMat, 2, 2, 1.0);
 
-    // calculate gradient in x and y direction
-    img2Sz = cvGetSize(img2);
-    IplImage *img2dx = cvCreateMat(img2Sz, IPL_DEPTH_64F, 1);
-    IplImage *img2dy = cvCreateMat(img2Sz, IPL_DEPTH_64F, 1);
-    cvSobel(img2, img2dx, 1, 0, 3);
-    cvSobel(img2, img2dy, 0, 1, 3);
-
     img1Sz = cvGetSize(img1);
+    img2Sz = cvGetSize(img2);
+
+    IplImage *img1Gray = cvCreateImage(img1Sz, IPL_DEPTH_8U, 1);
+    IplImage *img2Gray = cvCreateImage(img2Sz, IPL_DEPTH_8U, 1);
+    cvCvtColor(img1, img1Gray, CV_RGB2GRAY);
+    cvCvtColor(img2, img2Gray, CV_RGB2GRAY);
+
+    // calculate gradient in x and y direction
+    IplImage *img2dx = cvCreateImage(img2Sz, IPL_DEPTH_32F, 1);
+    IplImage *img2dy = cvCreateImage(img2Sz, IPL_DEPTH_32F, 1);
+    IplImage *img2dxdx = cvCreateImage(img2Sz, IPL_DEPTH_32F, 1);
+    IplImage *img2dydy = cvCreateImage(img2Sz, IPL_DEPTH_32F, 1);
+    IplImage *img2dxdy = cvCreateImage(img2Sz, IPL_DEPTH_32F, 1);
+    cvSobel(img2Gray, img2dx, 1, 0, 3);
+    cvSobel(img2Gray, img2dy, 0, 1, 3);
+    cvSobel(img2dx,   img2dxdx, 1, 0, 3);
+    cvSobel(img2dy,   img2dydy, 0, 1, 3); 
+    cvSobel(img2dx,   img2dxdy, 0, 1, 3);
+
+    CvMat *pImprove = cvCreateMat(8, 1, CV_64FC1);
+
+    CvMat *lastTransMat = cvCloneMat(transMat);
+    CvMat *lastGradnt   = cvCloneMat(pImprove);
+    double err;
+    double lastErr  = 0;
+    int    interNum = 0;
+    double step     = -1.0;
     while(1)
     {
-        residual.empty();
-
         gpc_polygon intersect;
+
+        /* map img2 to img1, and find the intersection */
         IntersectTwoImages(&intersect, img1, img2, transMat);
-        
+        /* Containing rectangle for intersection region */
         FindContainRect(&roi, &intersect, &img1Sz);
 
+        CvMat *projReslt = cvCreateMat(roi.height, roi.width, CV_64FC3);
+
+        int validNum = MapRoi(projReslt, &roi, transMat, &img2Sz);
         
+        /* theta(A) = (1/num(roi))*sum((I_1(x_1,y_1)-I_2(x_2,y_2))^2) */
+        CalcNewtonVector(pImprove, &err, 
+                img1Gray, img2Gray, img2dx, img2dy, 
+                img2dxdx, img2dydy, img2dxdy, 
+                &roi, projReslt, validNum);
+
+        /* Release dynamicly allocated resource */
+        cvReleaseMat(&projReslt);
+        gpc_free_polygon(&intersect);
+
+        if (interNum != 0)
+        {
+            if (fabs(err - lastErr) < 0.01 || interNum > 100)
+            {
+                printf("err=%lf, lastErr=%lf, break\n", err, lastErr);
+                break;
+            }
+
+            //if (err >= lastErr)
+            //{
+                //step /= 1.10;
+
+                ///* Consider it has reached convergence */
+                //if (step < 0.00000000000003/128.0)
+                //{
+                    //printf("step=%lf, break\n", step);
+                    //break;
+                //}
+
+                //cvCopy(lastTransMat, transMat, NULL);
+                //UpdateTransMat(transMat, lastGradnt, step);
+            //}
+            //else
+            {
+                lastErr = err;
+                cvCopy(transMat, lastTransMat, NULL);
+                cvCopy(pImprove, lastGradnt, NULL);
+                UpdateTransMat(transMat, pImprove, step);
+            }
+        }
+        else
+        {
+            lastErr = err;
+            cvCopy(transMat, lastTransMat, NULL);
+            cvCopy(pImprove, lastGradnt, NULL);
+            UpdateTransMat(transMat, pImprove, step);
+        }
+
+        printf("Iter[%d]: err=%lf\n", interNum, err);
+
+        interNum ++;
     }
 
-    cvReleaseMat(&paramMat);
+    cvCopy(lastTransMat, transMat, NULL);
+
+    cvReleaseMat(&pImprove);
+    cvReleaseMat(&lastTransMat);
     cvReleaseImage(&img2dx);
     cvReleaseImage(&img2dy);
+
+    return err;
 }
 
 
 int main( int argc, char** argv )
 {
 
-	IplImage  *img1;
-	IplImage  *img2;
+    IplImage  *img1;
+    IplImage  *img2;
 
-	struct feature* feat1, *feat2;
-	struct kd_node* kd_root;
-	int n1, n2, i;
+    struct feature* feat1, *feat2;
+    struct kd_node* kd_root;
+    int n1, n2, i;
 
-	if (argc != 3)
-	{
-		printf("Error! Format: bin image_file1 image_file2");
-		return 0;
-	}
+    if (argc != 3)
+    {
+        printf("Error! Format: bin image_file1 image_file2");
+        return 0;
+    }
 
-	img1_file = argv[1];
-	img2_file = argv[2];
+    img1_file = argv[1];
+    img2_file = argv[2];
 
-	CvMemStorage* memstorage = cvCreateMemStorage(0);
-	CvSeq *up_seq = cvCreateSeq(	CV_SEQ_ELTYPE_POINT,
-					sizeof(CvSeq),
-					sizeof(CvPoint),
-					memstorage); 
-	CvSeq *down_seq = cvCreateSeq(	CV_SEQ_ELTYPE_POINT,
-					sizeof(CvSeq),
-					sizeof(CvPoint),
-					memstorage);
+    CvMemStorage* memstorage = cvCreateMemStorage(0);
+    CvSeq *up_seq = cvCreateSeq(    CV_SEQ_ELTYPE_POINT,
+                    sizeof(CvSeq),
+                    sizeof(CvPoint),
+                    memstorage); 
+    CvSeq *down_seq = cvCreateSeq(    CV_SEQ_ELTYPE_POINT,
+                    sizeof(CvSeq),
+                    sizeof(CvPoint),
+                    memstorage);
 
-	img1 = cvLoadImage( img1_file, 1 );
-	if( ! img1 )
-		fatal_error( "unable to load image from %s", img1_file );
-	img2 = cvLoadImage( img2_file, 1 );
-	if( ! img2 )
-		fatal_error( "unable to load image from %s", img2_file );
+    img1 = cvLoadImage( img1_file, 1 );
+    if( ! img1 )
+        fatal_error( "unable to load image from %s", img1_file );
+    img2 = cvLoadImage( img2_file, 1 );
+    if( ! img2 )
+        fatal_error( "unable to load image from %s", img2_file );
 
-	stacked = stack_imgs( img1, img2 );
-
-
-	fprintf( stderr, "Finding features in %s...\n", img1_file );
-	n1 = sift_features( img1, &feat1 );
+    stacked = stack_imgs( img1, img2 );
 
 
-	fprintf( stderr, "Finding features in %s...\n", img2_file );
-	n2 = sift_features( img2, &feat2 );
+    fprintf( stderr, "Finding features in %s...\n", img1_file );
+    n1 = sift_features( img1, &feat1 );
 
-	if(1)
-	{
-		//draw_features( img1, feat1, n1 );
-		cvNamedWindow( "img1", 1 );
-		cvShowImage( "img1", img1 );
 
-	}
+    fprintf( stderr, "Finding features in %s...\n", img2_file );
+    n2 = sift_features( img2, &feat2 );
 
-	if(1)
-	{
-		//draw_features( img2, feat2, n2 );
-		cvNamedWindow( "img2", 1 );
-		cvShowImage( "img2", img2 );
-	}
+    if(1)
+    {
+        //draw_features( img1, feat1, n1 );
+        cvNamedWindow( "img1", 1 );
+        cvShowImage( "img1", img1 );
+
+    }
+
+    if(1)
+    {
+        //draw_features( img2, feat2, n2 );
+        cvNamedWindow( "img2", 1 );
+        cvShowImage( "img2", img2 );
+    }
 
     MatchSiftFeats(&kd_root, feat1, n1, feat2, n2, up_seq, down_seq, img1->height);
 
-	CvMat *transMat = 0;  // perspective transformation matrix
-	struct feature **inliers;
-	int    nin;
+    CvMat *transMat = 0;  // perspective transformation matrix
+    struct feature **inliers;
+    int    nin;
 
-	transMat = ransac_xform(feat1, n1, FEATURE_FWD_MATCH, 
+    transMat = ransac_xform(feat1, n1, FEATURE_FWD_MATCH, 
                             lsq_homog, 4, 0.5, homog_xfer_err, 3.0, 
                             &inliers, &nin);
-	resize_img();
-
-    //cvSaveImage("matchedfeat.jpg", stacked);
     if (nin == 0)
     {
         printf("Sorry. No homography is found!\n");
         return 0;
     }
 
-    //gpc_polygon intersect;
-    //IntersectTwoImages(&intersect, img1, img2, transMat);
+    resize_img();
 
+    ImproveThroughIteration(transMat, img1, img2);
 
-	CvPoint   nc[4];
-	CvPoint   upLeft, downRight;
-	CvSize    sz;
-	CvPoint   shift1, shift2;
-	IplImage  *transImg;
+    CvPoint   nc[4];
+    CvPoint   upLeft, downRight;
+    CvSize    sz;
+    CvPoint   shift1, shift2;
+    IplImage  *transImg;
 
-	nc[0] = ProjPoint(cvPoint(0, 0), transMat);
-	nc[1] = ProjPoint(cvPoint(img1->width-1, 0), transMat);
-	nc[2] = ProjPoint(cvPoint(img1->width-1, img1->height-1), transMat);
-	nc[3] = ProjPoint(cvPoint(0, img1->height-1), transMat);
+    nc[0] = ProjPoint(cvPoint(0, 0), transMat);
+    nc[1] = ProjPoint(cvPoint(img1->width-1, 0), transMat);
+    nc[2] = ProjPoint(cvPoint(img1->width-1, img1->height-1), transMat);
+    nc[3] = ProjPoint(cvPoint(0, img1->height-1), transMat);
 
-	upLeft.x    = nc[0].x;
-	upLeft.y    = nc[0].y;
-	downRight.x = nc[0].x;
-	downRight.y = nc[0].y;
-	for (i=1; i<4; i++)
-	{
-		if (nc[i].x < upLeft.x)
-		{
-			upLeft.x = nc[i].x;
-		}
-		if (nc[i].x > downRight.x)
-		{
-			downRight.x = nc[i].x;
-		}
+    upLeft.x    = nc[0].x;
+    upLeft.y    = nc[0].y;
+    downRight.x = nc[0].x;
+    downRight.y = nc[0].y;
+    for (i=1; i<4; i++)
+    {
+        if (nc[i].x < upLeft.x)
+        {
+            upLeft.x = nc[i].x;
+        }
+        if (nc[i].x > downRight.x)
+        {
+            downRight.x = nc[i].x;
+        }
 
-		if (nc[i].y < upLeft.y)
-		{
-			upLeft.y = nc[i].y;
-		}
-		if (nc[i].y > downRight.y)
-		{
-			downRight.y = nc[i].y;
-		}
-	}
+        if (nc[i].y < upLeft.y)
+        {
+            upLeft.y = nc[i].y;
+        }
+        if (nc[i].y > downRight.y)
+        {
+            downRight.y = nc[i].y;
+        }
+    }
 
-	sz.height  = downRight.y - upLeft.y + 1;
-	sz.width   = downRight.x - upLeft.x + 1;
-	shift1.x   = - upLeft.x;
-	shift1.y   = - upLeft.y;
+    sz.height  = downRight.y - upLeft.y + 1;
+    sz.width   = downRight.x - upLeft.x + 1;
+    shift1.x   = - upLeft.x;
+    shift1.y   = - upLeft.y;
 
-	transImg   = cvCreateImage(sz, img1->depth, img1->nChannels);
+    transImg   = cvCreateImage(sz, img1->depth, img1->nChannels);
 
-	// Transform img1 to align with img2, then shift it
-	warp_by_matrix<unsigned char>(img1, transImg, transMat, shift1);
+    // Transform img1 to align with img2, then shift it
+    warp_by_matrix<unsigned char>(img1, transImg, transMat, shift1);
 
-	IplImage  *imagePart1;
-	IplImage  *imagePart2;
-	IplImage  *stitchedImage;
-	IplImage  *stitchedImage2;
-	CvPoint   shift_t;
+    IplImage  *imagePart1;
+    IplImage  *imagePart2;
+    IplImage  *stitchedImage;
+    IplImage  *stitchedImage2;
+    CvPoint   shift_t;
 
-	// Calculate the new border
-	nc[0].x = 0;
-	nc[0].y = 0;
-	nc[1].x = img2->width - 1;
-	nc[1].y = 0;
-	nc[2].x = img2->width - 1;
-	nc[2].y = img2->height - 1;
-	nc[3].x = 0;
-	nc[3].y = img2->height - 1;
-	for (i=1; i<4; i++)
-	{
-		if (nc[i].x < upLeft.x)
-		{
-			upLeft.x = nc[i].x;
-		}
-		if (nc[i].x > downRight.x)
-		{
-			downRight.x = nc[i].x;
-		}
+    // Calculate the new border
+    nc[0].x = 0;
+    nc[0].y = 0;
+    nc[1].x = img2->width - 1;
+    nc[1].y = 0;
+    nc[2].x = img2->width - 1;
+    nc[2].y = img2->height - 1;
+    nc[3].x = 0;
+    nc[3].y = img2->height - 1;
+    for (i=1; i<4; i++)
+    {
+        if (nc[i].x < upLeft.x)
+        {
+            upLeft.x = nc[i].x;
+        }
+        if (nc[i].x > downRight.x)
+        {
+            downRight.x = nc[i].x;
+        }
 
-		if (nc[i].y < upLeft.y)
-		{
-			upLeft.y = nc[i].y;
-		}
-		if (nc[i].y > downRight.y)
-		{
-			downRight.y = nc[i].y;
-		}
-	}
+        if (nc[i].y < upLeft.y)
+        {
+            upLeft.y = nc[i].y;
+        }
+        if (nc[i].y > downRight.y)
+        {
+            downRight.y = nc[i].y;
+        }
+    }
 
-	sz.width  = (((downRight.x - upLeft.x + 1) + 3) & ~3);
-	sz.height = (((downRight.y - upLeft.y + 1) + 3) & ~3); 
-	
-	shift2.x = - upLeft.x;
-	shift2.y = - upLeft.y;
+    sz.width  = (((downRight.x - upLeft.x + 1) + 3) & ~3);
+    sz.height = (((downRight.y - upLeft.y + 1) + 3) & ~3); 
+    
+    shift2.x = - upLeft.x;
+    shift2.y = - upLeft.y;
 
-	stitchedImage   = cvCreateImage(sz, img1->depth, img1->nChannels);
-	stitchedImage2  = cvCreateImage(sz, img1->depth, img1->nChannels);
-	imagePart1      = cvCreateImage(sz, img1->depth, img1->nChannels);
-	imagePart2      = cvCreateImage(sz, img1->depth, img1->nChannels);
+    stitchedImage   = cvCreateImage(sz, img1->depth, img1->nChannels);
+    stitchedImage2  = cvCreateImage(sz, img1->depth, img1->nChannels);
+    imagePart1      = cvCreateImage(sz, img1->depth, img1->nChannels);
+    imagePart2      = cvCreateImage(sz, img1->depth, img1->nChannels);
 
-	shift_t.x = -shift1.x + shift2.x;
-	shift_t.y = -shift1.y + shift2.y;
+    shift_t.x = -shift1.x + shift2.x;
+    shift_t.y = -shift1.y + shift2.y;
 
-	// Map the first image
-	// Because transImg is already shifted by shift1 to make sure that there are no negative image coordinates,
-	// so we have to shift it back by shift1, then shift it by shift2 which is used to make sure there are no
-	// negative image coordinates in the new stitchedImg
-	shift_image<unsigned char>(transImg, imagePart1, shift_t);
+    // Map the first image
+    // Because transImg is already shifted by shift1 to make sure that there are no negative image coordinates,
+    // so we have to shift it back by shift1, then shift it by shift2 which is used to make sure there are no
+    // negative image coordinates in the new stitchedImg
+    shift_image<unsigned char>(transImg, imagePart1, shift_t);
 
-	shift_t.x = shift2.x;
-	shift_t.y = shift2.y;
-	shift_image<unsigned char>(img2, imagePart2, shift_t);
+    shift_t.x = shift2.x;
+    shift_t.y = shift2.y;
+    shift_image<unsigned char>(img2, imagePart2, shift_t);
 
-	OverlayImages(imagePart1, 0.5, imagePart2, 0.5, stitchedImage);
-	cvNamedWindow("Stitched");
-	cvShowImage("Stitched", stitchedImage);
-	cvSaveImage("stitched.jpg", stitchedImage);
+    OverlayImages(imagePart1, 0.5, imagePart2, 0.5, stitchedImage);
+    cvNamedWindow("Stitched");
+    cvShowImage("Stitched", stitchedImage);
+    cvSaveImage("stitched.jpg", stitchedImage);
 
-	cvWaitKey(0);
+    cvWaitKey(0);
 
-	//------�ͷ��ڴ��洢��-----------
-	cvReleaseMemStorage( &memstorage );
-	cvReleaseImage( &stacked );
-	cvReleaseImage( &img1 );
-	cvReleaseImage( &img2 );
-	kdtree_release( kd_root );
-	free( feat1 );
-	free( feat2 );
-	return 0;
+    //------�ͷ��ڴ��洢��-----------
+    cvReleaseMemStorage( &memstorage );
+    cvReleaseImage( &stacked );
+    cvReleaseImage( &img1 );
+    cvReleaseImage( &img2 );
+    kdtree_release( kd_root );
+    free( feat1 );
+    free( feat2 );
+    return 0;
 }
 
 
 
 void on_mouse( int event, int x, int y, int flags, void* param ) 
 {
-	if( (event==CV_EVENT_LBUTTONUP) &&  (flags==CV_EVENT_FLAG_CTRLKEY) ) 
-	{
-				
-	}
-	
-	if( (event==CV_EVENT_LBUTTONUP) &&  (flags==CV_EVENT_FLAG_ALTKEY) ) 
-		//ALT������������ʼ���µ�ʱ���Ŵ�ƥ������ͼ
-	{
-		
-		
-		//---------������ƥ�亯��--------------	
-		if(imgzoom_scale<1.5)
-		{
-			imgzoom_scale=1.1*imgzoom_scale;
-		}
-		
-		else imgzoom_scale=1.0;
-		//----�Ŵ�ƥ������ͼ-----
-		resize_img();
+    if( (event==CV_EVENT_LBUTTONUP) &&  (flags==CV_EVENT_FLAG_CTRLKEY) ) 
+    {
+                
+    }
+    
+    if( (event==CV_EVENT_LBUTTONUP) &&  (flags==CV_EVENT_FLAG_ALTKEY) ) 
+        //ALT������������ʼ���µ�ʱ���Ŵ�ƥ������ͼ
+    {
+        
+        
+        //---------������ƥ�亯��--------------    
+        if(imgzoom_scale<1.5)
+        {
+            imgzoom_scale=1.1*imgzoom_scale;
+        }
+        
+        else imgzoom_scale=1.0;
+        //----�Ŵ�ƥ������ͼ-----
+        resize_img();
 
-	}
-	
-	if( (event==CV_EVENT_RBUTTONUP) &&  (flags==CV_EVENT_FLAG_ALTKEY) ) 
-		
-		//ALT�������Ҽ���ʼ���µ�ʱ����Сƥ������ͼ
-	{
-		
-		
-		//---------������ƥ�亯��--------------	
-		if(imgzoom_scale>0.0)
-		{
-			imgzoom_scale=0.9*imgzoom_scale;
-		}
-		
-		else imgzoom_scale=0.5;
+    }
+    
+    if( (event==CV_EVENT_RBUTTONUP) &&  (flags==CV_EVENT_FLAG_ALTKEY) ) 
+        
+        //ALT�������Ҽ���ʼ���µ�ʱ����Сƥ������ͼ
+    {
+        
+        
+        //---------������ƥ�亯��--------------    
+        if(imgzoom_scale>0.0)
+        {
+            imgzoom_scale=0.9*imgzoom_scale;
+        }
+        
+        else imgzoom_scale=0.5;
 
-		//----��Сƥ������ͼ-----
-		resize_img();
+        //----��Сƥ������ͼ-----
+        resize_img();
 
-		//printf("%f\n",imgzoom_scale);
+        //printf("%f\n",imgzoom_scale);
 
-	}
-	
+    }
+    
 
 }
 
@@ -632,66 +926,67 @@ void on_mouse( int event, int x, int y, int flags, void* param )
 
 void resize_img()
 {
-	IplImage* resize_stacked;
+    IplImage* resize_stacked;
 
-	resize_stacked=cvCreateImage(cvSize(  (int)(stacked->width*imgzoom_scale),  (int)(stacked->height*imgzoom_scale)  ),
-				stacked->depth,
-				stacked->nChannels);
-	//----����ƥ������ͼ�Ĵ�С------
+    resize_stacked=cvCreateImage(cvSize(  (int)(stacked->width*imgzoom_scale),  (int)(stacked->height*imgzoom_scale)  ),
+                stacked->depth,
+                stacked->nChannels);
+    //----����ƥ������ͼ�Ĵ�С------
 
-	cvResize(stacked, resize_stacked, CV_INTER_AREA );
+    cvResize(stacked, resize_stacked, CV_INTER_AREA );
 
 
-	cvNamedWindow( "Matches", 1 );
+    cvNamedWindow( "Matches", 1 );
 
-	
-	//---------������Ӧ����--------------
-	
-	cvSetMouseCallback("Matches", on_mouse, 0 );
-	
+    
+    //---------������Ӧ����--------------
+    
+    cvSetMouseCallback("Matches", on_mouse, 0 );
+    
 
-	cvShowImage( "Matches", resize_stacked);
+    cvShowImage( "Matches", resize_stacked);
 
-	cvWaitKey( 0 );
+    //cvWaitKey( 0 );
 }
+
 
 void OverlayImages(const IplImage *part1, double w1, const IplImage *part2, double w2, IplImage *out)
 {
-	unsigned char *pSrc1, *pSrc2;
-	unsigned char *pDst;
-	int           i, j;
+    unsigned char *pSrc1, *pSrc2;
+    unsigned char *pDst;
+    int           i, j;
 
-	assert(part1->width == part2->width);
-	assert(part1->height == part2->height);
-	assert(part1->depth == part2->depth);
-	assert(part1->nChannels == part2->nChannels);
+    assert(part1->width == part2->width);
+    assert(part1->height == part2->height);
+    assert(part1->depth == part2->depth);
+    assert(part1->nChannels == part2->nChannels);
 
-	i = 0;
-	while (i < part1->height)
-	{
-		pSrc1   = (unsigned char *)(part1->imageData + i * part1->widthStep);
-		pSrc2   = (unsigned char *)(part2->imageData + i * part2->widthStep);
-		pDst    = (unsigned char *)(out->imageData + i * out->widthStep);
+    i = 0;
+    while (i < part1->height)
+    {
+        pSrc1   = (unsigned char *)(part1->imageData + i * part1->widthStep);
+        pSrc2   = (unsigned char *)(part2->imageData + i * part2->widthStep);
+        pDst    = (unsigned char *)(out->imageData + i * out->widthStep);
 
-		for (j=0; j<out->widthStep; j++)
-		{
-			double tmp;
+        for (j=0; j<out->widthStep; j++)
+        {
+            double tmp;
 
-			if (pSrc1[j] != 0 && pSrc2[j] != 0)
-				tmp = pSrc1[j] * w1 + pSrc2[j] * w2;
-			else
-				tmp = (pSrc1[j])?(pSrc1[j]):(pSrc2[j]);
+            if (pSrc1[j] != 0 && pSrc2[j] != 0)
+                tmp = pSrc1[j] * w1 + pSrc2[j] * w2;
+            else
+                tmp = (pSrc1[j])?(pSrc1[j]):(pSrc2[j]);
 
-			if (tmp > 255)
-			{
-				tmp = 255;
-				//print("Value is clamped!\n");
-			}
-			pDst[j] = (unsigned char)tmp;
-		}
+            if (tmp > 255)
+            {
+                tmp = 255;
+                //print("Value is clamped!\n");
+            }
+            pDst[j] = (unsigned char)tmp;
+        }
 
-		i ++;
-	}
+        i ++;
+    }
 }
 
 /**
@@ -701,65 +996,65 @@ void OverlayImages(const IplImage *part1, double w1, const IplImage *part2, doub
 template <typename ElementType>
 void blend_images(const IplImage *part1, const IplImage *part2, const IplImage *map, IplImage *out)
 {
-	CvSize     sz;
-	int        i, j, k;
+    CvSize     sz;
+    int        i, j, k;
 
-	ElementType *ptr_1, *ptr_2, *ptr_out;
-	unsigned char *ptr_map;
+    ElementType *ptr_1, *ptr_2, *ptr_out;
+    unsigned char *ptr_map;
 
-	assert(part1->width == part2->width);
-	assert(part1->height == part2->height);
-	assert(part1->width == out->width);
-	assert(part1->height == out->height);
-	assert(part1->width == map->width);
-	assert(part1->height == map->height);
-	assert((part1->depth&0xff) == (8*sizeof(ElementType)));
-	assert((map->depth&0xff) == 8);
+    assert(part1->width == part2->width);
+    assert(part1->height == part2->height);
+    assert(part1->width == out->width);
+    assert(part1->height == out->height);
+    assert(part1->width == map->width);
+    assert(part1->height == map->height);
+    assert((part1->depth&0xff) == (8*sizeof(ElementType)));
+    assert((map->depth&0xff) == 8);
 
-	sz = cvGetSize(part1);
+    sz = cvGetSize(part1);
 
-	// Synthesize the low freq band
-	for (i=0; i<sz.height; i++)
-	{
-		ptr_1   = (ElementType *)(part1->imageData + i*part1->widthStep);
-		ptr_2   = (ElementType *)(part2->imageData + i*part2->widthStep);
-		ptr_out = (ElementType *)(out->imageData + i*out->widthStep);
-		ptr_map = (unsigned char *)(map->imageData + i*map->widthStep);
+    // Synthesize the low freq band
+    for (i=0; i<sz.height; i++)
+    {
+        ptr_1   = (ElementType *)(part1->imageData + i*part1->widthStep);
+        ptr_2   = (ElementType *)(part2->imageData + i*part2->widthStep);
+        ptr_out = (ElementType *)(out->imageData + i*out->widthStep);
+        ptr_map = (unsigned char *)(map->imageData + i*map->widthStep);
 
-		for (j=0; j<sz.width; j++)
-		{
-			for (k=0; k<part1->nChannels; k++)
-				ptr_out[k] = (ElementType)((ptr_map[0]*ptr_1[k] + (int)(255-ptr_map[0])*ptr_2[k]) / 255);
+        for (j=0; j<sz.width; j++)
+        {
+            for (k=0; k<part1->nChannels; k++)
+                ptr_out[k] = (ElementType)((ptr_map[0]*ptr_1[k] + (int)(255-ptr_map[0])*ptr_2[k]) / 255);
 
-			ptr_1   += part1->nChannels;
-			ptr_2   += part2->nChannels;
-			ptr_out += out->nChannels;
-			ptr_map += 1;
-		}
-	}
+            ptr_1   += part1->nChannels;
+            ptr_2   += part2->nChannels;
+            ptr_out += out->nChannels;
+            ptr_map += 1;
+        }
+    }
 }
 
 CvPoint ProjPoint(CvPoint in, CvMat *trans)
 {
-	double   tx, ty, t;
-	double   *db;
-	CvPoint  res;
-	
-	int depth, cn;
-	depth = CV_MAT_DEPTH(trans->type);
-	cn    = CV_MAT_CN(trans->type);
-	assert(depth == CV_64F);
-	assert(cn == 1);
-	db    = trans->data.db;
+    double   tx, ty, t;
+    double   *db;
+    CvPoint  res;
+    
+    int depth, cn;
+    depth = CV_MAT_DEPTH(trans->type);
+    cn    = CV_MAT_CN(trans->type);
+    assert(depth == CV_64F);
+    assert(cn == 1);
+    db    = trans->data.db;
 
-	tx = db[0] * in.x + db[1] * in.y + db[2];
-	ty = db[3] * in.x + db[4] * in.y + db[5];
-	t  = db[6] * in.x + db[7] * in.y + db[8];
+    tx = db[0] * in.x + db[1] * in.y + db[2];
+    ty = db[3] * in.x + db[4] * in.y + db[5];
+    t  = db[6] * in.x + db[7] * in.y + db[8];
 
-	res.x = (int)(tx / t + 0.5);
-	res.y = (int)(ty / t + 0.5);
+    res.x = (int)(tx / t + 0.5);
+    res.y = (int)(ty / t + 0.5);
 
-	return res;
+    return res;
 }
 
 /**
@@ -768,102 +1063,102 @@ CvPoint ProjPoint(CvPoint in, CvMat *trans)
 template <typename ElementType>
 void warp_by_matrix   (IplImage *src, IplImage *dst, CvMat *transMat, CvPoint shift)
 {
-	CvSize sz;
-	double *db;
-	int    i, j, k;
-	double t, tx, ty;
-	double xl, xr, yu, yd;
-	int    srcx, srcy;
-	double tmp;
-	int    s;
+    CvSize sz;
+    double *db;
+    int    i, j, k;
+    double t, tx, ty;
+    double xl, xr, yu, yd;
+    int    srcx, srcy;
+    double tmp;
+    int    s;
 
-	gsl_matrix      *mat;
-	gsl_matrix      *invm;
-	gsl_permutation *perm;
+    gsl_matrix      *mat;
+    gsl_matrix      *invm;
+    gsl_permutation *perm;
 
-	ElementType *pSrc11, *pSrc12;
-	ElementType *pSrc21, *pSrc22;
-	ElementType *pDst;
-	
-	assert(CV_MAT_DEPTH(transMat->type) == CV_64F);
-	assert(CV_MAT_CN(transMat->type) == 1);
-	assert(transMat->rows == transMat->cols);
-	assert(transMat->rows == 3);
-	
-	db    = transMat->data.db;
-	mat   = gsl_matrix_alloc(3, 3);
-	invm  = gsl_matrix_alloc(3, 3);
-	perm  = gsl_permutation_alloc(3);
-	assert(mat->tda == 3);
-	memcpy(mat->data, db, sizeof(double)*9);
+    ElementType *pSrc11, *pSrc12;
+    ElementType *pSrc21, *pSrc22;
+    ElementType *pDst;
+    
+    assert(CV_MAT_DEPTH(transMat->type) == CV_64F);
+    assert(CV_MAT_CN(transMat->type) == 1);
+    assert(transMat->rows == transMat->cols);
+    assert(transMat->rows == 3);
+    
+    db    = transMat->data.db;
+    mat   = gsl_matrix_alloc(3, 3);
+    invm  = gsl_matrix_alloc(3, 3);
+    perm  = gsl_permutation_alloc(3);
+    assert(mat->tda == 3);
+    memcpy(mat->data, db, sizeof(double)*9);
 
-	gsl_linalg_LU_decomp(mat, perm, &s);
-	gsl_linalg_LU_invert(mat, perm, invm);
-	memcpy(db,invm->data, sizeof(double)*9);
+    gsl_linalg_LU_decomp(mat, perm, &s);
+    gsl_linalg_LU_invert(mat, perm, invm);
+    memcpy(db,invm->data, sizeof(double)*9);
 
-	cvZero(dst);
-	sz = cvGetSize(dst);
-	for (i=0; i<sz.height; i++) {
-		for (j=0; j<sz.width; j++) {
-			tx = db[0]*(j-shift.x) + db[1]*(i-shift.y) + db[2];
-			ty = db[3]*(j-shift.x) + db[4]*(i-shift.y) + db[5];
-			t  = db[6]*(j-shift.x) + db[7]*(i-shift.y) + db[8];
+    cvZero(dst);
+    sz = cvGetSize(dst);
+    for (i=0; i<sz.height; i++) {
+        for (j=0; j<sz.width; j++) {
+            tx = db[0]*(j-shift.x) + db[1]*(i-shift.y) + db[2];
+            ty = db[3]*(j-shift.x) + db[4]*(i-shift.y) + db[5];
+            t  = db[6]*(j-shift.x) + db[7]*(i-shift.y) + db[8];
 
-			tx /= t;
-			ty /= t;
-			
-			if (tx >= 0 && tx < (src->width-1)) {
-				srcx = (int)tx;
-				xl   = tx - srcx;
-				xr   = 1.0 - xl;
-			} else if (tx == (src->width-1)) {
-				srcx = (int)(tx - 1.0);
-				xl   = 1.0;
-				xr   = 0.0;
-			} else {
+            tx /= t;
+            ty /= t;
+            
+            if (tx >= 0 && tx < (src->width-1)) {
+                srcx = (int)tx;
+                xl   = tx - srcx;
+                xr   = 1.0 - xl;
+            } else if (tx == (src->width-1)) {
+                srcx = (int)(tx - 1.0);
+                xl   = 1.0;
+                xr   = 0.0;
+            } else {
 #if COMPLAIN_OUT_OF_BOUND
-				printf("x-coordinate %lf out of bound\n", tx);
+                printf("x-coordinate %lf out of bound\n", tx);
 #endif
-				continue;
-			}
+                continue;
+            }
 
-			if (ty >= 0 && ty < (src->height-1)) {
-				srcy = (int)ty;
-				yu   = ty - srcy;
-				yd   = 1.0 - yu;
-			} else if (ty == (src->height-1)) {
-				srcy = (int)(ty - 1.0);
-				yu   = 1.0;
-				yd   = 0.0;
-			} else {
+            if (ty >= 0 && ty < (src->height-1)) {
+                srcy = (int)ty;
+                yu   = ty - srcy;
+                yd   = 1.0 - yu;
+            } else if (ty == (src->height-1)) {
+                srcy = (int)(ty - 1.0);
+                yu   = 1.0;
+                yd   = 0.0;
+            } else {
 #if COMPLAIN_OUT_OF_BOUND
-				printf("y-coordinate %lf out of bound\n", ty);
+                printf("y-coordinate %lf out of bound\n", ty);
 #endif
-				continue;
-			}
+                continue;
+            }
 
-			pSrc11 = (ElementType *)(src->imageData + src->widthStep * srcy + src->nChannels * srcx);
-			pSrc12 = pSrc11 + src->nChannels;
-			pSrc21 = (ElementType *)((char *)pSrc11 + src->widthStep);
-			pSrc22 = pSrc21 + src->nChannels;
-			pDst   = (ElementType *)(dst->imageData + dst->widthStep * i + dst->nChannels * j);
+            pSrc11 = (ElementType *)(src->imageData + src->widthStep * srcy + src->nChannels * srcx);
+            pSrc12 = pSrc11 + src->nChannels;
+            pSrc21 = (ElementType *)((char *)pSrc11 + src->widthStep);
+            pSrc22 = pSrc21 + src->nChannels;
+            pDst   = (ElementType *)(dst->imageData + dst->widthStep * i + dst->nChannels * j);
 
-			for (k=0; k<src->nChannels; k++) {
-				tmp     = (*pSrc11)*yd*xr + (*pSrc21)*yu*xr + (*pSrc12)*yd*xl + (*pSrc22)*yu*xl;
-				(*pDst) = (ElementType)(tmp);
+            for (k=0; k<src->nChannels; k++) {
+                tmp     = (*pSrc11)*yd*xr + (*pSrc21)*yu*xr + (*pSrc12)*yd*xl + (*pSrc22)*yu*xl;
+                (*pDst) = (ElementType)(tmp);
 
-				pSrc11 ++;
-				pSrc12 ++;
-				pSrc21 ++;
-				pSrc22 ++;
-				pDst   ++;
-			}
-		}
-	}
+                pSrc11 ++;
+                pSrc12 ++;
+                pSrc21 ++;
+                pSrc22 ++;
+                pDst   ++;
+            }
+        }
+    }
 
-	gsl_permutation_free(perm);
-	gsl_matrix_free(invm);
-	gsl_matrix_free(mat);
+    gsl_permutation_free(perm);
+    gsl_matrix_free(invm);
+    gsl_matrix_free(mat);
 }
 
 /**
@@ -872,35 +1167,35 @@ void warp_by_matrix   (IplImage *src, IplImage *dst, CvMat *transMat, CvPoint sh
 template <typename ElementType>
 void shift_image(const IplImage *src, IplImage *dst, CvPoint shift)
 {
-	int i, j, k;
-	ElementType *pSrc;
-	ElementType *pDst;
+    int i, j, k;
+    ElementType *pSrc;
+    ElementType *pDst;
 
-	assert(src->nChannels == dst->nChannels);
-	assert(src->depth == dst->depth);
-	assert((src->depth & 0xff) == 8*sizeof(ElementType));
+    assert(src->nChannels == dst->nChannels);
+    assert(src->depth == dst->depth);
+    assert((src->depth & 0xff) == 8*sizeof(ElementType));
 
-	cvZero(dst);
+    cvZero(dst);
 
-	for (i=0; i<src->height; i++)
-	{
-		if ((i + shift.y) < 0 || (i + shift.y) >= dst->height)
-			continue;
+    for (i=0; i<src->height; i++)
+    {
+        if ((i + shift.y) < 0 || (i + shift.y) >= dst->height)
+            continue;
 
-		pSrc = (ElementType *)(src->imageData + i * src->widthStep);
-		pDst = (ElementType *)(dst->imageData + (i+shift.y) * dst->widthStep); 
+        pSrc = (ElementType *)(src->imageData + i * src->widthStep);
+        pDst = (ElementType *)(dst->imageData + (i+shift.y) * dst->widthStep); 
 
-		for (j=0; j<src->width; j++)
-		{
-			if ((j + shift.x) < 0 || (j + shift.x) >= dst->width)
-				continue;
-			
-			for (k=0; k<src->nChannels; k++)
-			{
-				pDst[dst->nChannels * (j+shift.x) + k] = pSrc[src->nChannels * j + k];
-			}
-		}
-	}
+        for (j=0; j<src->width; j++)
+        {
+            if ((j + shift.x) < 0 || (j + shift.x) >= dst->width)
+                continue;
+            
+            for (k=0; k<src->nChannels; k++)
+            {
+                pDst[dst->nChannels * (j+shift.x) + k] = pSrc[src->nChannels * j + k];
+            }
+        }
+    }
 }
 
 //static struct feature **inliers = 0;
@@ -910,22 +1205,22 @@ void shift_image(const IplImage *src, IplImage *dst, CvPoint shift)
 // */
 //void calc_residual(double *p, double *x, int m, int n, void *data)
 //{
-//	int i;
-//	double x1, y1; // Points to be matched by transfrom (x2, y2)
-//	double x2, y2;
-//	double den;
+//    int i;
+//    double x1, y1; // Points to be matched by transfrom (x2, y2)
+//    double x2, y2;
+//    double den;
 //
-//	for (i=0; i<n/2; i++)
-//	{
-//		x2 = inliers[i]->x;
-//		y2 = inliers[i]->y;
-//		x1 = inliers[i]->fwd_match->x;
-//		y1 = inliers[i]->fwd_match->y;
+//    for (i=0; i<n/2; i++)
+//    {
+//        x2 = inliers[i]->x;
+//        y2 = inliers[i]->y;
+//        x1 = inliers[i]->fwd_match->x;
+//        y1 = inliers[i]->fwd_match->y;
 //
-//		den = p[6]*x2 + p[7]*y2 + 1;
-//		x[2*i]   = x1 - (p[0]*x2 + p[1]*y2 + p[2])/den;
-//		x[2*i+1] = y1 - (p[3]*x2 + p[4]*y2 + p[5])/den;
-//	}
+//        den = p[6]*x2 + p[7]*y2 + 1;
+//        x[2*i]   = x1 - (p[0]*x2 + p[1]*y2 + p[2])/den;
+//        x[2*i+1] = y1 - (p[3]*x2 + p[4]*y2 + p[5])/den;
+//    }
 //}
 //
 ///**
@@ -933,49 +1228,49 @@ void shift_image(const IplImage *src, IplImage *dst, CvPoint shift)
 // */
 //void jac_residual(double *p, double *jac, int m, int n, void *data)
 //{
-//	int i, j;
-//	double x1, y1;
-//	double x2, y2;
-//	double den, numa, numb;
+//    int i, j;
+//    double x1, y1;
+//    double x2, y2;
+//    double den, numa, numb;
 //
-//	j = 0;
-//	for (i=0; i<n/2; i++)
-//	{
-//		x2 = inliers[i]->x;
-//		y2 = inliers[i]->y;
-//		x1 = inliers[i]->fwd_match->x;
-//		y1 = inliers[i]->fwd_match->y;
+//    j = 0;
+//    for (i=0; i<n/2; i++)
+//    {
+//        x2 = inliers[i]->x;
+//        y2 = inliers[i]->y;
+//        x1 = inliers[i]->fwd_match->x;
+//        y1 = inliers[i]->fwd_match->y;
 //
-//		numa = p[0]*x2 + p[1]*y2 + p[2];
-//		numb = p[3]*x2 + p[4]*y2 + p[5];
-//		den  = p[6]*x2 + p[7]*y2 + 1.0;
+//        numa = p[0]*x2 + p[1]*y2 + p[2];
+//        numb = p[3]*x2 + p[4]*y2 + p[5];
+//        den  = p[6]*x2 + p[7]*y2 + 1.0;
 //
-//		/* row 2*i */
+//        /* row 2*i */
 //
-//		jac[j++] = - x2/den;
-//		jac[j++] = - y2/den;
-//		jac[j++] = - 1/den;
+//        jac[j++] = - x2/den;
+//        jac[j++] = - y2/den;
+//        jac[j++] = - 1/den;
 //
-//		jac[j++] = 0;
-//		jac[j++] = 0;
-//		jac[j++] = 0;
+//        jac[j++] = 0;
+//        jac[j++] = 0;
+//        jac[j++] = 0;
 //
-//		jac[j++] = - numa * x2 / (den * den);
-//		jac[j++] = - numa * y2 / (den * den);
+//        jac[j++] = - numa * x2 / (den * den);
+//        jac[j++] = - numa * y2 / (den * den);
 //
-//		/* row 2*i+1 */
+//        /* row 2*i+1 */
 //
-//		jac[j++] = 0;
-//		jac[j++] = 0;
-//		jac[j++] = 0;
+//        jac[j++] = 0;
+//        jac[j++] = 0;
+//        jac[j++] = 0;
 //
-//		jac[j++] = - x2/den;
-//		jac[j++] = - y2/den;
-//		jac[j++] = - 1/den;
+//        jac[j++] = - x2/den;
+//        jac[j++] = - y2/den;
+//        jac[j++] = - 1/den;
 //
-//		jac[j++] = - numb * x2 / (den * den);
-//		jac[j++] = - numb * y2 / (den * den);
-//	}
+//        jac[j++] = - numb * x2 / (den * den);
+//        jac[j++] = - numb * y2 / (den * den);
+//    }
 //}
 
 ///**
@@ -984,32 +1279,32 @@ void shift_image(const IplImage *src, IplImage *dst, CvPoint shift)
 // */
 //void nonlinear_optimize(CvMat *trans, struct feature **in, int nin)
 //{
-//	double params[9];
-//	double opts[LM_OPTS_SZ], info[LM_INFO_SZ];
-//	double *residual;
-//	double ret;
-//	int    i;
+//    double params[9];
+//    double opts[LM_OPTS_SZ], info[LM_INFO_SZ];
+//    double *residual;
+//    double ret;
+//    int    i;
 //
-//	inliers = in;
+//    inliers = in;
 //
-//	opts[0]=LM_INIT_MU; 
-//	opts[1]=1E-15; 
-//	opts[2]=1E-15; 
-//	opts[3]=1E-20;
-//	opts[4]=LM_DIFF_DELTA; // relevant only if the finite difference Jacobian version is used
-//	
-//	int depth, cn;
-//	depth = CV_MAT_DEPTH(trans->type);
-//	cn    = CV_MAT_CN(trans->type);
-//	assert(depth == CV_64F);
-//	assert(cn == 1);
+//    opts[0]=LM_INIT_MU; 
+//    opts[1]=1E-15; 
+//    opts[2]=1E-15; 
+//    opts[3]=1E-20;
+//    opts[4]=LM_DIFF_DELTA; // relevant only if the finite difference Jacobian version is used
+//    
+//    int depth, cn;
+//    depth = CV_MAT_DEPTH(trans->type);
+//    cn    = CV_MAT_CN(trans->type);
+//    assert(depth == CV_64F);
+//    assert(cn == 1);
 //
-//	memcpy(params, trans->data.db, sizeof(double)*9);
-//	residual = (double *)malloc(sizeof(double)*2*nin);
+//    memcpy(params, trans->data.db, sizeof(double)*9);
+//    residual = (double *)malloc(sizeof(double)*2*nin);
 //
-//	// Calculate residual using given parameters 
-//	memset(residual, 0, sizeof(double)*2*nin);
+//    // Calculate residual using given parameters 
+//    memset(residual, 0, sizeof(double)*2*nin);
 //
-//	ret = dlevmar_der(calc_residual, jac_residual, params, residual, 8, 2*nin, 1000, opts, info, NULL, NULL, NULL);
-//	return;
+//    ret = dlevmar_der(calc_residual, jac_residual, params, residual, 8, 2*nin, 1000, opts, info, NULL, NULL, NULL);
+//    return;
 //}
