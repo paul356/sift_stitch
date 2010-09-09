@@ -4,6 +4,7 @@
 #include "utils.h"
 #include "xform.h"
 #include "gpc.h"
+#include "SiftTree.h"
 
 #include <cv.h>
 #include <cxcore.h>
@@ -29,6 +30,10 @@
 #define NN_SQ_DIST_RATIO_THR 0.49
 
 #define EQUAL_IMAGE_SIZE(src, dst) (((src)->width == (dst)->width)&&((dst)->height == (dst)->height))
+
+#define INTER_TIMES_MAX 50
+#define IMPROVE_VALUE_THRESHOLD 0.05
+#define IMPROVE_RATIO_THRESHOLD 0.005
 
 char *img1_file = 0;
 char *img2_file = 0;
@@ -546,6 +551,14 @@ void UpdateTransMat(CvMat *pTransMat, const CvMat *pVect, const double step)
    }
 }
 
+double myFabs(double v)
+{
+    if (v < 0)
+        return -v;
+    else
+        return v;
+}
+
 
 double ImproveThroughIteration(CvMat *transMat, const IplImage *img1, const IplImage *img2)
 {
@@ -612,43 +625,23 @@ double ImproveThroughIteration(CvMat *transMat, const IplImage *img1, const IplI
         cvReleaseMat(&projReslt);
         gpc_free_polygon(&intersect);
 
-        if (interNum != 0)
+        if (myFabs(err - lastErr) < IMPROVE_VALUE_THRESHOLD || 
+            myFabs(err - lastErr)/lastErr < IMPROVE_RATIO_THRESHOLD)
         {
-            if (fabs(err - lastErr) < 0.01 || interNum > 100)
-            {
-                printf("err=%lf, lastErr=%lf, break\n", err, lastErr);
-                break;
-            }
-
-            //if (err >= lastErr)
-            //{
-                //step /= 1.10;
-
-                ///* Consider it has reached convergence */
-                //if (step < 0.00000000000003/128.0)
-                //{
-                    //printf("step=%lf, break\n", step);
-                    //break;
-                //}
-
-                //cvCopy(lastTransMat, transMat, NULL);
-                //UpdateTransMat(transMat, lastGradnt, step);
-            //}
-            //else
-            {
-                lastErr = err;
-                cvCopy(transMat, lastTransMat, NULL);
-                cvCopy(pImprove, lastGradnt, NULL);
-                UpdateTransMat(transMat, pImprove, step);
-            }
+            printf("err=%lf, lastErr=%lf, break\n", err, lastErr);
+            break;
         }
-        else
+
+        if (interNum > INTER_TIMES_MAX)
         {
-            lastErr = err;
-            cvCopy(transMat, lastTransMat, NULL);
-            cvCopy(pImprove, lastGradnt, NULL);
-            UpdateTransMat(transMat, pImprove, step);
+            printf("Interation reach max times(%d)", INTER_TIMES_MAX);
+            break;
         }
+
+        lastErr = err;
+        cvCopy(transMat, lastTransMat, NULL);
+        cvCopy(pImprove, lastGradnt, NULL);
+        UpdateTransMat(transMat, pImprove, step);
 
         printf("Iter[%d]: err=%lf\n", interNum, err);
 
@@ -666,7 +659,99 @@ double ImproveThroughIteration(CvMat *transMat, const IplImage *img1, const IplI
 }
 
 
-int main( int argc, char** argv )
+void DrawCross(IplImage *pIplImg, int x, int y, const char *pText)
+{
+    static CvFont font;
+    static int    fontInit = false;
+
+    if (fontInit == false)
+    {
+        cvInitFont(&font, CV_FONT_HERSHEY_SIMPLEX, 0.4, 0.4);
+        fontInit = true;
+    }
+
+    cvLine(pIplImg, cvPoint(x-2, y), cvPoint(x+3, y), cvScalar(0, 0, 255));
+    cvLine(pIplImg, cvPoint(x, y-2), cvPoint(x, y+3), cvScalar(0, 0, 255));
+    cvPutText(pIplImg, pText, cvPoint(x,y), &font, cvScalar(255,255,255));
+}
+
+
+#define SIFT_TREE_SPLITS 3
+#define SIFT_TREE_DEPTH  8 
+#define MAX_INPUT_IMGS   200
+
+int main(int argc, char **argv)
+{
+    int nimgs, i;
+    IplImage       *iplImgs[MAX_INPUT_IMGS];
+    struct feature *ppFeat[MAX_INPUT_IMGS];
+    int             nFeat[MAX_INPUT_IMGS];
+
+    memset(iplImgs, 0, sizeof(iplImgs));
+    memset(ppFeat,  0, sizeof(ppFeat));
+    memset(nFeat,   0, sizeof(nFeat));
+
+    SiftTree siftTree(SIFT_TREE_SPLITS, SIFT_TREE_DEPTH);
+
+    nimgs = argc-1;
+    for (i=0; i<nimgs; i++)
+    {
+        iplImgs[i] = cvLoadImage(argv[i+1], 1);
+
+        nFeat[i] = sift_features(iplImgs[i], &ppFeat[i]);
+        siftTree.AddSiftFeature(ppFeat[i], nFeat[i], i);
+    }
+
+    siftTree.BuildTree();
+
+    int vwMax = ((int)pow(SIFT_TREE_SPLITS, SIFT_TREE_DEPTH+1)-1)/(SIFT_TREE_SPLITS-1);
+    std::vector<int> vwCount(vwMax, 0);
+
+    for (i=0; i<nimgs; i++)
+    {
+        int j;
+        for (j=0; j<nFeat[i]; j++)
+        {
+            unsigned int vw;
+            siftTree.Quantize(&vw, ppFeat[i][j].descr);
+            ppFeat[i][j].feat_class = vw;
+            vwCount[vw] += 1;
+        }
+    }
+
+    const char *pWinNameTplt = "img%03d";
+    char  winNameBuf[20];
+    char  times[20];
+    for (i=0; i<nimgs; i++)
+    {
+        int j;
+        for (j=0; j<nFeat[i]; j++)
+        {
+            int vw = ppFeat[i][j].feat_class;
+
+            if (vwCount[vw] > 1)
+            {
+                snprintf(times, sizeof(times), "%d", vw);
+                DrawCross(iplImgs[i], ppFeat[i][j].x, ppFeat[i][j].y, times);
+            }
+        }
+
+        snprintf(winNameBuf, sizeof(winNameBuf), pWinNameTplt, i);
+        cvNamedWindow(winNameBuf, CV_WINDOW_AUTOSIZE);
+        cvShowImage(winNameBuf, iplImgs[i]);
+    }
+    
+    cvWaitKey();
+
+    // Release resource
+    for (i=0; i<argc-1; i++)
+        cvReleaseImage(&iplImgs[i]);
+
+    return 0;
+}
+
+
+int main2( int argc, char** argv )
 {
 
     IplImage  *img1;

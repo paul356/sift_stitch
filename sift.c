@@ -1013,8 +1013,10 @@ void compute_descriptors( CvSeq* features, IplImage*** gauss_pyr, int d, int n)
 	{
 		feat = CV_GET_SEQ_ELEM( struct feature, features, i );
 		ddata = feat_detection_data( feat );
-		hist = descr_hist( gauss_pyr[ddata->octv][ddata->intvl], ddata->r,
-			ddata->c, feat->ori, ddata->scl_octv, d, n );
+		hist = descr_hist( gauss_pyr[ddata->octv][ddata->intvl], 
+                ddata->r, ddata->c, 
+                feat->ori, ddata->scl_octv, 
+                d, n );
 		hist_to_descr( hist, d, n, feat );
 		release_descr_hist( &hist, d );
 	}
@@ -1059,6 +1061,7 @@ double*** descr_hist( IplImage* img, int r, int c, double ori,
 	hist_width = SIFT_DESCR_SCL_FCTR * scl;
 	radius = hist_width * sqrt(2) * ( d + 1.0 ) * 0.5 + 0.5;
 	for( i = -radius; i <= radius; i++ )
+    {
 		for( j = -radius; j <= radius; j++ )
 		{
 			/*
@@ -1072,6 +1075,7 @@ double*** descr_hist( IplImage* img, int r, int c, double ori,
 			cbin = c_rot + d / 2 - 0.5;
 
 			if( rbin > -1.0  &&  rbin < d  &&  cbin > -1.0  &&  cbin < d )
+            {
 				if( calc_grad_mag_ori( img, r + i, c + j, &grad_mag, &grad_ori ))
 				{
 					grad_ori -= ori;
@@ -1084,7 +1088,9 @@ double*** descr_hist( IplImage* img, int r, int c, double ori,
 					w = exp( -(c_rot * c_rot + r_rot * r_rot) / exp_denom );
 					interp_hist_entry( hist, rbin, cbin, obin, grad_mag * w, d, n );
 				}
+            }
 		}
+    }
 
 	return hist;
 }
