@@ -680,7 +680,7 @@ void DrawCross(IplImage *pIplImg, int x, int y, const char *pText)
 #define SIFT_TREE_DEPTH  8 
 #define MAX_INPUT_IMGS   200
 
-int main(int argc, char **argv)
+int main3(int argc, char **argv)
 {
     int nimgs, i;
     IplImage       *iplImgs[MAX_INPUT_IMGS];
